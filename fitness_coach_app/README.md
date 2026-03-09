@@ -27,3 +27,9 @@ A clean-architecture, modular, security-conscious template for an AI fitness coa
 - `frontend/src` — UI components/pages/services/theme styles
 - `database` — SQL schema + migration placeholders
 - `docs` — security and architecture notes
+
+## Security
+
+- Bearer token auth middleware (timing-safe compare)
+- Sliding-window rate limiting middleware
+- Environment-based secret configuration
