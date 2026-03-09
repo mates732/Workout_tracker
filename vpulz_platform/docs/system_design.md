@@ -1,33 +1,50 @@
-# 1. System Architecture
+# 1) System Architecture
 
-VPULZ architecture uses clean service boundaries:
+VPULZ uses a modular FastAPI backend and React Native mobile app.
 
-- API Layer (`backend/api`): HTTP endpoints and request validation.
-- Service Layer (`backend/services`): workout logic, recommendations, analytics, predictions.
-- Repository Layer (`backend/database/repositories.py`): persistence abstraction.
-- AI Layer (`backend/ai` + `backend/agents`): context builder, rule engine, model router, model clients.
-- Security (`backend/utils/security.py`): API key guard.
+- `backend/api`: route handlers for workouts, routines, analytics, and assistant chat.
+- `backend/services`: domain logic for fast logging, analytics, prediction, and recommendations.
+- `backend/ai`: context builder, rule engine, model router, and model clients.
+- `backend/core/container.py`: shared service container to keep a consistent in-memory state.
+- `backend/database`: repository interfaces + SQL schema for PostgreSQL + pgvector.
 
-Request path:
+Flow: `Client -> API -> Services -> Repositories/AI -> Response`.
 
-Client -> FastAPI Endpoint -> Service -> Repository + AI Orchestrator -> Response
+# 2) Product Feature Design
 
-# 2. Product Feature Design
+Core fast logging actions:
+- `start_workout()`
+- `add_exercise()`
+- `log_set()`
+- `edit_set()`
+- `finish_workout()`
 
-- Ultra-fast logging: `start_workout`, `add_exercise`, `log_set`, `edit_set`, `finish_workout`
-- Routines: manual + goal-generated routines with split templates
-- Progress analytics: 1RM, volume, frequency, consistency
-- AI coach: asks-aware responses using rules + model routing
-- Predictions: 4/8/12 week strength forecast
-- Fatigue and strength score: computed from recent sessions
+Each set stores: `weight`, `reps`, `RPE`, `notes`, `timestamp`.
 
-# 3. Database Schema
+Additional product modules:
+- routine generation for PPL / upper-lower / full body
+- progressive overload recommendation
+- smart warmup generation
+- real-time workout companion feedback
+- strength score, fatigue score, and progress snapshots
+- predictive 4/8/12-week 1RM forecasts and training DNA profile
 
-See `database/schema.sql` for Users, Exercises, Workouts, WorkoutExercises, Sets, Routines,
-RoutineExercises, PersonalRecords (represented through metrics+insights extensions),
-ProgressMetrics, AIInsights (represented as `knowledge_chunks` + insight pipeline).
+# 3) Database Schema
 
-# 4. API Endpoints
+PostgreSQL schema in `vpulz_platform/database/schema.sql` includes:
+- `users`
+- `exercises`
+- `workouts`
+- `workout_exercises`
+- `sets`
+- `routines`
+- `routine_exercises`
+- `personal_records`
+- `progress_metrics`
+- `ai_insights`
+- `knowledge_chunks` (`vector(768)` for pgvector embeddings)
+
+# 4) API Endpoints
 
 - `POST /workouts/start`
 - `POST /workouts/{workout_id}/exercise`
@@ -40,41 +57,58 @@ ProgressMetrics, AIInsights (represented as `knowledge_chunks` + insight pipelin
 - `POST /assistant/ask`
 - `GET /analytics/progress/{user_id}`
 - `GET /analytics/strength-score/{user_id}`
+- `GET /analytics/warmup?target_weight=120`
 
-# 5. AI Agent Design
+# 5) AI Architecture
 
-AI orchestrator flow:
-1. Build context from profile/history/routine/fatigue.
-2. Try rule engine first (cost-optimized deterministic answers).
-3. Route query to fast model or reasoning model.
-4. Return answer with safe fallback text.
+AI pipeline:
+1. user query enters assistant endpoint
+2. context builder summarizes profile + history + routine + fatigue
+3. rule engine handles deterministic low-cost queries first
+4. model router sends simple prompts to fast model (Groq/Llama), complex prompts to reasoning model (Gemini)
 
-# 6. Prediction Model Design
+This reduces AI cost while preserving quality for complex analysis.
 
-- Strength forecast based on latest estimated 1RM and linear progression coefficients.
-- Fatigue model based on rolling volume + high-RPE + decline proxy.
-- Strength score combines 1RM, volume, and consistency into one index.
+# 6) Prediction Model Design
 
-# 7. UX Design Structure
+- Estimated 1RM uses Epley: `weight * (1 + reps/30)`.
+- Forecast model applies bounded short-cycle progression factors for week 4/8/12.
+- Training DNA classifies user adaptation (moderate-volume, high-intensity, or balanced).
 
-- Dashboard: today suggestion, fatigue, strength score, PR highlights.
-- Workout Screen: fast set logging actions and edit path.
-- Progress Screen: volume trend, consistency, predictions.
-- Coach Chat: simple question-to-advice interface.
+# 7) Mobile App Structure
 
-# 8. Backend Implementation
-
-Implemented under `vpulz_platform/backend` as modular Python packages with FastAPI entrypoint at `main.py`.
-
-# 9. Deployment Guide
-
-Run locally:
-
-```bash
-pip install -r vpulz_platform/backend/requirements.txt
-PYTHONPATH=. uvicorn vpulz_platform.backend.main:app --host 0.0.0.0 --port 8100
+```text
+mobile/react-native-app/
+  screens/
+    HomeScreen.tsx
+    WorkoutScreen.tsx
+    ProgressScreen.tsx
+    CoachScreen.tsx
+    ProfileScreen.tsx
+  components/
+    SetLogger.tsx
+    ExerciseChip.tsx
+    StrengthScoreCard.tsx
+  hooks/
+    useWorkoutSession.ts
+    useRealtimeSync.ts
+  services/
+    apiClient.ts
+    offlineQueue.ts
 ```
 
-Security:
-- Send `X-API-Key` header matching `VPULZ_API_KEY`.
-- Configure secrets via environment variables.
+# 8) Backend Implementation
+
+Implemented as Python modules under `vpulz_platform/backend`:
+- stateful service composition in `core/container.py`
+- robust workout/routine APIs with error handling
+- analytics endpoint with predictions + DNA + timeline
+- smart warmup endpoint
+- real-time companion feedback when a set is logged
+
+# 9) Deployment Infrastructure
+
+- Dockerized deployment for backend and database
+- CI pipeline for lint/test/build before release
+- environment-driven secret management (`VPULZ_API_KEY`, provider keys)
+- scalable target: AWS ECS/Fargate or GCP Cloud Run + managed Postgres

@@ -23,8 +23,11 @@ class PredictionService:
         if not workouts:
             return {"response_profile": "insufficient_data"}
         avg_exercises = sum(len(w.exercises) for w in workouts) / len(workouts)
-        if avg_exercises >= 5:
-            profile = "moderate_volume_high_frequency"
+        high_rpe_sets = sum(1 for w in workouts for ex in w.exercises for s in ex.sets if s.rpe >= 9)
+        if avg_exercises >= 5 and high_rpe_sets < 3:
+            profile = "responds_to_moderate_volume"
+        elif high_rpe_sets >= 3:
+            profile = "responds_to_high_intensity"
         else:
-            profile = "lower_volume_higher_intensity"
+            profile = "balanced_adaptation"
         return {"response_profile": profile}

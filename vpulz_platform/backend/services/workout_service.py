@@ -17,10 +17,14 @@ class WorkoutService:
 
     def add_exercise(self, workout_id: str, exercise_name: str) -> Workout:
         workout = self.repo.get(workout_id)
+        if any(ex.exercise_name == exercise_name for ex in workout.exercises):
+            return workout
         workout.exercises.append(WorkoutExercise(exercise_name=exercise_name))
         return workout
 
     def log_set(self, workout_id: str, exercise_name: str, weight: float, reps: int, rpe: float, notes: str = "") -> Workout:
+        if weight <= 0 or reps <= 0 or not (1 <= rpe <= 10):
+            raise ValueError("Invalid set payload")
         workout = self.repo.get(workout_id)
         for exercise in workout.exercises:
             if exercise.exercise_name == exercise_name:
