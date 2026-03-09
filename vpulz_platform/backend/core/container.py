@@ -11,6 +11,7 @@ from vpulz_platform.backend.services.prediction_service import PredictionService
 from vpulz_platform.backend.services.recommendation_service import RecommendationService
 from vpulz_platform.backend.services.routine_service import RoutineService
 from vpulz_platform.backend.services.workout_service import WorkoutService
+from vpulz_platform.backend.services.wrapped_service import WrappedService
 
 
 @dataclass
@@ -20,6 +21,7 @@ class ServiceContainer:
     analytics: AnalyticsService = field(default_factory=AnalyticsService)
     predictor: PredictionService = field(default_factory=PredictionService)
     recommendations: RecommendationService = field(default_factory=RecommendationService)
+    wrapped: WrappedService = field(default_factory=WrappedService)
 
     @property
     def workout_service(self) -> WorkoutService:
