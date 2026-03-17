@@ -2,17 +2,7 @@ from __future__ import annotations
 
 import hmac
 
-try:
-    from fastapi import Header, HTTPException
-except ModuleNotFoundError:  # pragma: no cover - fallback for non-api test envs
-    class HTTPException(Exception):
-        def __init__(self, status_code: int, detail: str):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail = detail
-
-    def Header(default=None):  # type: ignore
-        return default
+from fastapi import Header, HTTPException
 
 from core.settings import settings
 

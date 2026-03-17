@@ -1,12 +1,275 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fitness Coach Frontend</title>
+    <title>VPULZ</title>
+    <link rel="stylesheet" href="./src/styles/theme.css" />
   </head>
   <body>
-    <h1>Fitness Coach Frontend Scaffold</h1>
-    <p>Connect this UI to backend endpoints for full experience.</p>
+    <main class="phone-shell">
+      <header class="app-header">
+        <p class="eyebrow" id="screenEyebrow">Today</p>
+        <h1 id="screenTitle">Start a workout</h1>
+      </header>
+
+      <section class="screen is-active" data-screen="home">
+        <button class="hero-cta" id="startWorkout">Start Empty Workout</button>
+        <div class="micro-list">
+          <button class="micro-item" id="continueWorkout">
+            <span>Continue active workout</span>
+            <small id="homeContinueMeta">No active session</small>
+          </button>
+          <button class="micro-item" id="openLibraryFromHome">
+            <span>Browse templates</span>
+            <small>Upper / Lower / Push Pull Legs</small>
+          </button>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="workout">
+        <div class="session-meta" id="sessionMeta">No active workout</div>
+        <div class="tracker-stats" id="trackerStats">0 exercises · 0 sets · 0 kg volume</div>
+
+        <div class="add-exercise-inline">
+          <input id="exerciseNameInput" type="text" placeholder="Exercise name" />
+          <button id="addExerciseInline">Add</button>
+        </div>
+
+        <div id="exerciseList"></div>
+
+        <div class="sticky-actions">
+          <button class="ghost" id="openLibrary">+ Add Exercise</button>
+          <button class="solid" id="finishWorkout">Finish Workout</button>
+        </div>
+      </section>
+
+      <section class="screen" data-screen="library">
+        <div class="search-wrap">
+          <input type="search" placeholder="Search exercises" aria-label="Search exercises" />
+          <button>Filter</button>
+        </div>
+        <ul class="plain-list">
+          <li>Barbell Row</li>
+          <li>Romanian Deadlift</li>
+          <li>Lat Pulldown</li>
+          <li>Face Pull</li>
+          <li>Hammer Curl</li>
+          <li>Rear Delt Fly</li>
+        </ul>
+      </section>
+
+      <section class="screen" data-screen="progress">
+        <ul class="plain-list">
+          <li>Volume trend <small id="progressVolume">No data yet</small></li>
+          <li>Best lifts <small>Track via workout logs</small></li>
+          <li>Consistency <small id="progressSessions">0 sessions completed</small></li>
+        </ul>
+      </section>
+
+      <section class="screen" data-screen="profile">
+        <ul class="plain-list">
+          <li>Progress <small>Strength & body trends</small></li>
+          <li>Body Metrics <small>Weight and measurements</small></li>
+          <li>Goals <small>Targets and deadlines</small></li>
+          <li>Workout History <small>All logged sessions</small></li>
+        </ul>
+      </section>
+
+      <button id="coachFab" class="coach-fab">AI</button>
+
+      <nav class="bottom-nav">
+        <button class="tab is-current" data-target="home">Home</button>
+        <button class="tab" data-target="workout">Workout</button>
+        <button class="tab" data-target="progress">Progress</button>
+        <button class="tab" data-target="profile">Profile</button>
+      </nav>
+    </main>
+
+    <script>
+      const labels = {
+        home: { eyebrow: "Today", title: "Start a workout" },
+        workout: { eyebrow: "Session", title: "Log your sets" },
+        library: { eyebrow: "Library", title: "Pick an exercise" },
+        progress: { eyebrow: "Progress", title: "Review momentum" },
+        profile: { eyebrow: "Profile", title: "Manage your account" },
+      };
+
+      const tabs = document.querySelectorAll('.tab');
+      const screens = document.querySelectorAll('.screen');
+      const eyebrow = document.getElementById('screenEyebrow');
+      const title = document.getElementById('screenTitle');
+      const exerciseList = document.getElementById('exerciseList');
+      const trackerStats = document.getElementById('trackerStats');
+      const sessionMeta = document.getElementById('sessionMeta');
+      const homeContinueMeta = document.getElementById('homeContinueMeta');
+      const progressVolume = document.getElementById('progressVolume');
+      const progressSessions = document.getElementById('progressSessions');
+
+      const state = {
+        activeWorkout: null,
+        sessionsCompleted: 0,
+        totalVolumeAllSessions: 0,
+      };
+
+      const open = (target) => {
+        screens.forEach((el) => el.classList.toggle('is-active', el.dataset.screen === target));
+        tabs.forEach((el) => el.classList.toggle('is-current', el.dataset.target === target));
+        eyebrow.textContent = labels[target].eyebrow;
+        title.textContent = labels[target].title;
+      };
+
+      const computeTotals = () => {
+        if (!state.activeWorkout) return { sets: 0, volume: 0, exercises: 0 };
+        const sets = state.activeWorkout.exercises.reduce((acc, ex) => acc + ex.sets.length, 0);
+        const volume = state.activeWorkout.exercises.reduce(
+          (acc, ex) => acc + ex.sets.reduce((v, set) => v + set.weight * set.reps, 0),
+          0,
+        );
+        return { sets, volume, exercises: state.activeWorkout.exercises.length };
+      };
+
+      const renderWorkout = () => {
+        if (!state.activeWorkout) {
+          sessionMeta.textContent = 'No active workout';
+          trackerStats.textContent = '0 exercises · 0 sets · 0 kg volume';
+          exerciseList.innerHTML = '';
+          homeContinueMeta.textContent = 'No active session';
+          return;
+        }
+
+        const totals = computeTotals();
+        sessionMeta.textContent = `${state.activeWorkout.name} · ${new Date(state.activeWorkout.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        trackerStats.textContent = `${totals.exercises} exercises · ${totals.sets} sets · ${Math.round(totals.volume)} kg volume`;
+        homeContinueMeta.textContent = `${totals.sets} sets logged · active now`;
+
+        exerciseList.innerHTML = state.activeWorkout.exercises
+          .map((exercise) => {
+            const rows = exercise.sets
+              .map(
+                (set, index) => `<label class="set-row">
+                  <span>${index + 1}</span>
+                  <input type="number" value="${set.weight}" data-ex="${exercise.name}" data-index="${index}" data-field="weight" />
+                  <input type="number" value="${set.reps}" data-ex="${exercise.name}" data-index="${index}" data-field="reps" />
+                </label>`,
+              )
+              .join('');
+
+            return `<article class="exercise-block">
+              <div class="exercise-head">
+                <h2>${exercise.name}</h2>
+                <small>${exercise.sets.length} sets</small>
+              </div>
+              <div class="set-head"><span>SET</span><span>KG</span><span>REPS</span></div>
+              ${rows}
+              <button class="mini-add-set" data-add-set="${exercise.name}">+ Set</button>
+            </article>`;
+          })
+          .join('');
+      };
+
+      const refreshProgress = () => {
+        progressSessions.textContent = `${state.sessionsCompleted} sessions completed`;
+        progressVolume.textContent = `${Math.round(state.totalVolumeAllSessions)} kg total logged`;
+      };
+
+      const startWorkout = () => {
+        state.activeWorkout = {
+          name: 'Live Workout',
+          startedAt: Date.now(),
+          exercises: [],
+        };
+        renderWorkout();
+        open('workout');
+      };
+
+      const addExercise = (name) => {
+        if (!state.activeWorkout || !name.trim()) return;
+        const exists = state.activeWorkout.exercises.find((ex) => ex.name.toLowerCase() === name.trim().toLowerCase());
+        if (exists) return;
+        state.activeWorkout.exercises.push({ name: name.trim(), sets: [{ weight: 20, reps: 10 }] });
+        renderWorkout();
+      };
+
+      tabs.forEach((tab) => tab.addEventListener('click', () => open(tab.dataset.target)));
+      document.getElementById('openLibrary').addEventListener('click', () => open('library'));
+      document.getElementById('openLibraryFromHome').addEventListener('click', () => open('library'));
+      document.getElementById('continueWorkout').addEventListener('click', () => open('workout'));
+      document.getElementById('startWorkout').addEventListener('click', startWorkout);
+
+      document.getElementById('addExerciseInline').addEventListener('click', () => {
+        const input = document.getElementById('exerciseNameInput');
+        addExercise(input.value);
+        input.value = '';
+      });
+
+      document.getElementById('finishWorkout').addEventListener('click', () => {
+        if (!state.activeWorkout) return;
+        const totals = computeTotals();
+        state.sessionsCompleted += 1;
+        state.totalVolumeAllSessions += totals.volume;
+        state.activeWorkout = null;
+        renderWorkout();
+        refreshProgress();
+        open('progress');
+      });
+
+      exerciseList.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-add-set]');
+        if (!button || !state.activeWorkout) return;
+        const exercise = state.activeWorkout.exercises.find((ex) => ex.name === button.dataset.addSet);
+        if (!exercise) return;
+        const last = exercise.sets[exercise.sets.length - 1] || { weight: 20, reps: 10 };
+        exercise.sets.push({ ...last });
+        renderWorkout();
+      });
+
+      exerciseList.addEventListener('input', (event) => {
+        const input = event.target;
+        if (!state.activeWorkout || !input.dataset.ex) return;
+        const exercise = state.activeWorkout.exercises.find((ex) => ex.name === input.dataset.ex);
+        if (!exercise) return;
+        const setEntry = exercise.sets[Number(input.dataset.index)];
+        if (!setEntry) return;
+        const nextValue = Number(input.value) || 0;
+        if (input.dataset.field === 'weight') setEntry.weight = nextValue;
+        if (input.dataset.field === 'reps') setEntry.reps = nextValue;
+        const totals = computeTotals();
+        trackerStats.textContent = `${totals.exercises} exercises · ${totals.sets} sets · ${Math.round(totals.volume)} kg volume`;
+      });
+
+      const fab = document.getElementById('coachFab');
+      let dragging = false;
+
+      const edgeSnap = (x, y) => {
+        const m = 8;
+        const maxX = window.innerWidth - fab.offsetWidth - m;
+        const maxY = window.innerHeight - fab.offsetHeight - m;
+        const cx = Math.max(m, Math.min(x, maxX));
+        const cy = Math.max(m, Math.min(y, maxY));
+        const d = [
+          { e: 'left', v: cx },
+          { e: 'right', v: maxX - cx },
+          { e: 'top', v: cy },
+          { e: 'bottom', v: maxY - cy },
+        ].sort((a, b) => a.v - b.v)[0].e;
+        if (d === 'left') return { x: m, y: cy };
+        if (d === 'right') return { x: maxX, y: cy };
+        if (d === 'top') return { x: cx, y: m };
+        return { x: cx, y: maxY };
+      };
+
+      fab.addEventListener('pointerdown', () => (dragging = true));
+      window.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const p = edgeSnap(e.clientX - fab.offsetWidth / 2, e.clientY - fab.offsetHeight / 2);
+        fab.style.left = `${p.x}px`;
+        fab.style.top = `${p.y}px`;
+      });
+      window.addEventListener('pointerup', () => (dragging = false));
+
+      refreshProgress();
+      renderWorkout();
+    </script>
   </body>
 </html>
