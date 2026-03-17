@@ -11,7 +11,13 @@ from workout_tracker.services.habits import HabitStatus, habit_completion_rate, 
 from workout_tracker.services.mobility import mobility_recommendations
 from workout_tracker.services.notifications import goal_milestone_notification, recovery_reminder, workout_reminder
 from workout_tracker.services.rest_timer import extend_rest, skip_rest, start_rest_timer
-from workout_tracker.ui.components import dashboard, workout_card
+from workout_tracker.ui.components import (
+    dashboard,
+    home_decision_screen,
+    regression_guardrails,
+    visual_system_rules,
+    workout_card,
+)
 from workout_tracker.ui.theme import get_theme
 
 
@@ -20,8 +26,11 @@ def test_theme_components_and_notifications():
     light = get_theme("light")
     assert dark.primary.c500.startswith("#")
     assert light.gradient_primary.startswith("linear-gradient")
-    assert dashboard().name == "dashboard"
-    assert workout_card().layout == "card"
+    assert dashboard().name == "home_decision"
+    assert workout_card().layout == "hero_action"
+    assert home_decision_screen().intent_question.startswith("What should")
+    assert len(visual_system_rules()) == 4
+    assert "one second" in regression_guardrails()[-1]
 
     now = datetime.utcnow()
     assert workout_reminder(now).title
