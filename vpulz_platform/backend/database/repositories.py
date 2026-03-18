@@ -22,6 +22,18 @@ class WorkoutRepository:
     def by_user(self, user_id: str) -> list[Workout]:
         return [w for w in self.store.values() if w.user_id == user_id]
 
+    def active_by_user(self, user_id: str) -> Workout | None:
+        active = [w for w in self.store.values() if w.user_id == user_id and w.ended_at is None]
+        if not active:
+            return None
+        return max(active, key=lambda workout: workout.started_at)
+
+    def latest_by_user(self, user_id: str) -> Workout | None:
+        workouts = self.by_user(user_id)
+        if not workouts:
+            return None
+        return max(workouts, key=lambda workout: workout.started_at)
+
 
 @dataclass
 class RoutineRepository:

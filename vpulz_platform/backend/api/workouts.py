@@ -8,6 +8,32 @@ from vpulz_platform.backend.schemas.api import AddExerciseRequest, EditSetReques
 router = APIRouter(prefix="/workouts", tags=["workouts"])
 
 
+def _serialize_workout(workout) -> dict:
+    return {
+        "workout_id": workout.workout_id,
+        "user_id": workout.user_id,
+        "started_at": workout.started_at.isoformat(),
+        "ended_at": workout.ended_at.isoformat() if workout.ended_at else None,
+        "total_volume": workout.total_volume,
+        "exercises": [
+            {
+                "exercise_name": exercise.exercise_name,
+                "sets": [
+                    {
+                        "weight": logged_set.weight,
+                        "reps": logged_set.reps,
+                        "rpe": logged_set.rpe,
+                        "notes": logged_set.notes,
+                        "timestamp": logged_set.timestamp.isoformat(),
+                    }
+                    for logged_set in exercise.sets
+                ],
+            }
+            for exercise in workout.exercises
+        ],
+    }
+
+
 @router.post("/start")
 def start_workout(payload: StartWorkoutRequest) -> dict:
     workout = container.workout_service.start_workout(payload.user_id)
@@ -57,3 +83,17 @@ def finish_workout(workout_id: str) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workout not found") from exc
     return {"workout_id": workout.workout_id, "finished": workout.ended_at is not None}
+
+
+@router.get("/active/{user_id}")
+def active_workout(user_id: str) -> dict:
+    workout = container.workout_repo.active_by_user(user_id)
+    if workout is None:
+        return {"workout": None}
+    return {"workout": _serialize_workout(workout)}
+
+
+@router.get("/history/{user_id}")
+def workout_history(user_id: str) -> dict:
+    workouts = sorted(container.workout_repo.by_user(user_id), key=lambda workout: workout.started_at, reverse=True)
+    return {"items": [_serialize_workout(workout) for workout in workouts]}

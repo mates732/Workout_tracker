@@ -9,81 +9,114 @@ class WorkoutController:
     def __init__(self, service: WorkoutService) -> None:
         self.service = service
 
-    def create(self, user_id: str, name: str) -> dict:
+    @staticmethod
+    def _detail_from_key_error(exc: KeyError, default: str) -> str:
+        return str(exc.args[0]) if exc.args else default
+
+    def start_workout_session(self, user_id: str) -> dict:
         try:
-            workout = self.service.create_workout(user_id, name)
-            return {
-                "workout_index": len(self.service.list_workouts(user_id)) - 1,
-                "name": workout.name,
-                "user_id": workout.user_id,
-                "total_sets": workout.total_sets,
-                "total_volume": workout.total_volume,
-            }
+            return self.service.start_session(user_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def add_exercise(self, user_id: str, workout_index: int, exercise_name: str, target_muscle: str, equipment: str, notes: str) -> dict:
+    def finish_workout_session(self, workout_id: str) -> dict:
         try:
-            exercise = self.service.add_exercise(user_id, workout_index, exercise_name, target_muscle, equipment, notes)
-            return {
-                "name": exercise.name,
-                "target_muscle": exercise.target_muscle,
-                "equipment": exercise.equipment,
-                "notes": exercise.notes,
-                "sets": len(exercise.sets),
-            }
-        except (ValueError, IndexError, KeyError) as exc:
+            return self.service.finish_session(workout_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=self._detail_from_key_error(exc, "Workout session not found")) from exc
+
+    def active_workout_session(self, user_id: str) -> dict:
+        try:
+            return self.service.get_active_session(user_id)
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def add_set(
+    def get_workout_state(self, workout_id: str) -> dict:
+        try:
+            return self.service.get_workout_state(workout_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=self._detail_from_key_error(exc, "Workout session not found")) from exc
+
+    def search_exercises(self, query: str | None, muscle_group: str | None, limit: int) -> dict:
+        try:
+            return self.service.search_exercises(query=query, muscle_group=muscle_group, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def add_exercise_to_workout(self, workout_id: str, exercise_id: int | None, exercise_name: str | None) -> dict:
+        try:
+            return self.service.add_exercise_to_workout(
+                workout_id=workout_id,
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            detail = self._detail_from_key_error(exc, "Resource not found")
+            status_code = 404
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    def log_set(
         self,
-        user_id: str,
-        workout_index: int,
-        exercise_name: str,
-        weight_kg: float,
+        workout_id: str,
+        weight: float,
         reps: int,
         rpe: float,
-        rest_seconds: int,
-        notes: str,
+        duration: int,
+        completed: bool,
+        workout_exercise_id: str | None,
+        exercise_id: int | None,
+        exercise_name: str | None,
     ) -> dict:
         try:
-            workout = self.service.add_set(
-                user_id=user_id,
-                workout_index=workout_index,
-                exercise_name=exercise_name,
-                weight_kg=weight_kg,
+            return self.service.log_set(
+                workout_id=workout_id,
+                weight=weight,
                 reps=reps,
                 rpe=rpe,
-                rest_seconds=rest_seconds,
-                notes=notes,
+                duration=duration,
+                completed=completed,
+                workout_exercise_id=workout_exercise_id,
+                exercise_id=exercise_id,
+                exercise_name=exercise_name,
             )
-            return {
-                "name": workout.name,
-                "user_id": workout.user_id,
-                "total_sets": workout.total_sets,
-                "total_volume": workout.total_volume,
-            }
-        except (ValueError, IndexError, KeyError) as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=self._detail_from_key_error(exc, "Resource not found")) from exc
 
-    def summary(self, user_id: str, workout_index: int) -> dict:
+    def update_set(
+        self,
+        set_id: str,
+        weight: float | None,
+        reps: int | None,
+        rpe: float | None,
+        duration: int | None,
+        completed: bool | None,
+    ) -> dict:
         try:
-            return self.service.get_workout_summary(user_id, workout_index)
-        except (ValueError, IndexError, KeyError) as exc:
+            return self.service.update_set(
+                set_id=set_id,
+                weight=weight,
+                reps=reps,
+                rpe=rpe,
+                duration=duration,
+                completed=completed,
+            )
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=self._detail_from_key_error(exc, "Resource not found")) from exc
 
-    def list_user_workouts(self, user_id: str) -> dict:
-        workouts = self.service.list_workouts(user_id)
-        return {
-            "user_id": user_id,
-            "count": len(workouts),
-            "workouts": [
-                {
-                    "workout_index": idx,
-                    "name": workout.name,
-                    "total_sets": workout.total_sets,
-                    "total_volume": workout.total_volume,
-                }
-                for idx, workout in enumerate(workouts)
-            ],
-        }
+    def get_exercise_progress(self, exercise_id: int, user_id: str | None) -> dict:
+        try:
+            return self.service.get_progress(exercise_id=exercise_id, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=self._detail_from_key_error(exc, "Exercise not found")) from exc

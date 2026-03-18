@@ -1,46 +1,75 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from core.database import Base, create_database_engine, create_session_factory
+from models.exercise_db import ExerciseDB
+from repositories.workout_repository import WorkoutRepository
 from services.workout_service import WorkoutService
 
 
-def test_workout_creation_and_set_tracking() -> None:
-    service = WorkoutService()
-    workout = service.create_workout("u1", "Push Day")
-    assert workout.name == "Push Day"
+def _service(tmp_path: Path) -> WorkoutService:
+    engine = create_database_engine(f"sqlite:///{tmp_path / 'service.db'}")
+    session_factory = create_session_factory(engine)
+    Base.metadata.create_all(bind=engine)
+    service = WorkoutService(session_factory=session_factory, repository=WorkoutRepository())
 
-    service.add_exercise("u1", 0, "Bench Press", target_muscle="chest", equipment="barbell")
-    updated = service.add_set("u1", 0, weight_kg=80, reps=8, rpe=8, exercise_name="Bench Press", notes="Strong")
-
-    assert updated.total_sets == 1
-    assert updated.total_volume == 640
-    bench = updated.get_exercise("Bench Press")
-    assert bench is not None
-    assert bench.target_muscle == "chest"
-    assert bench.sets[0].notes == "Strong"
-
-
-def test_summary_groups_sets_by_exercise_with_info() -> None:
-    service = WorkoutService()
-    service.create_workout("u2", "Pull Day")
-    service.add_exercise("u2", 0, "Deadlift", target_muscle="back", equipment="barbell")
-    service.add_set("u2", 0, weight_kg=120, reps=5, rpe=8.5, exercise_name="Deadlift")
-    service.add_set("u2", 0, weight_kg=125, reps=3, rpe=9, exercise_name="Deadlift")
-    service.add_set("u2", 0, weight_kg=70, reps=10, rpe=8, exercise_name="Barbell Row")
-
-    summary = service.get_workout_summary("u2", 0)
-    assert summary["total_sets"] == 3
-    assert summary["total_volume"] == 1675
-    assert len(summary["exercises"]) == 2
-
-    deadlift_summary = next(item for item in summary["exercises"] if item["name"] == "Deadlift")
-    assert deadlift_summary["target_muscle"] == "back"
-    assert deadlift_summary["sets"] == 2
+    with session_factory.begin() as session:
+        session.add(
+            ExerciseDB(
+                name="Bench Press",
+                muscle_group="chest",
+                equipment="barbell",
+                instructions="Press barbell from chest.",
+            )
+        )
+    return service
 
 
-def test_add_set_rejects_invalid_rest() -> None:
-    service = WorkoutService()
-    service.create_workout("u3", "Leg Day")
+def test_workout_service_session_lifecycle_and_logging(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    first = service.start_session("u1")
+    second = service.start_session("u1")
 
-    try:
-        service.add_set("u3", 0, weight_kg=100, reps=5, rpe=8, rest_seconds=-10)
-        raise AssertionError("Expected ValueError for invalid rest_seconds")
-    except ValueError as exc:
-        assert "rest_seconds" in str(exc)
+    assert first["resumed"] is False
+    assert second["resumed"] is True
+    workout_id = second["workout"]["id"]
+
+    added = service.add_exercise_to_workout(workout_id=workout_id, exercise_name="Bench Press")
+    assert added["exercise"]["name"] == "Bench Press"
+
+    logged = service.log_set(
+        workout_id=workout_id,
+        weight=100,
+        reps=5,
+        rpe=8.5,
+        exercise_name="Bench Press",
+    )
+    assert logged["set"]["volume"] == 500
+    assert "suggestion" in logged
+    assert logged["suggestion"]["next_weight_kg"] == 102.5
+
+    finished = service.finish_session(workout_id)
+    assert finished["workout"]["status"] == "finished"
+    assert finished["workout"]["end_time"] is not None
+
+
+def test_workout_service_progress_tracking(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    started = service.start_session("u2")
+    workout_id = started["workout"]["id"]
+    service.log_set(workout_id=workout_id, weight=100, reps=5, rpe=8.5, exercise_name="Bench Press")
+    service.finish_session(workout_id)
+
+    started_next = service.start_session("u2")
+    next_workout_id = started_next["workout"]["id"]
+    service.log_set(workout_id=next_workout_id, weight=102.5, reps=6, rpe=8.5, exercise_name="Bench Press")
+
+    state = service.get_workout_state(next_workout_id)
+    exercise_id = state["workout"]["exercises"][0]["exercise_id"]
+    progress = service.get_progress(exercise_id=exercise_id, user_id="u2")
+
+    assert progress["exercise_name"] == "Bench Press"
+    assert [item["weight"] for item in progress["weight_over_time"]] == [100.0, 102.5]
+    assert len(progress["volume_trend"]) == 2
+
