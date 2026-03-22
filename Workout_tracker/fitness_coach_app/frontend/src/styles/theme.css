@@ -1,0 +1,13 @@
+:root {
+  --primary-500: #6366F1;
+  --primary-700: #4338CA;
+  --accent-500: #14B8A6;
+  --bg-50: #F8FAFC;
+}
+
+.theme-dark {
+  --primary-500: #8B5CF6;
+  --primary-700: #4C1D95;
+  --accent-500: #06B6D4;
+  --bg-50: #020617;
+}
