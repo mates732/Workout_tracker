@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ProfileScreen } from '../../features/profile/ProfileScreen';
 import { ProgressScreen } from '../../features/progress/ProgressScreen';
-import { WorkoutScreen } from '../../features/workout/WorkoutScreen';
+import { HomeScreen } from '../../features/home/HomeScreen';
 import { colors } from '../../shared/theme/tokens';
 
 export type MainTabsParamList = {
@@ -52,12 +52,12 @@ export function MainTabs() {
         ),
       })}
     >
-      <Tab.Screen name="Workout" component={WorkoutScreen} />
+      <Tab.Screen name="Workout" component={HomeScreen} />
       <Tab.Screen
         name="Progress"
         component={ProgressScreen}
         options={{
-          title: 'Analytics',
+          title: 'Calendar',
         }}
       />
       <Tab.Screen name="Profile" component={ProfileScreen} />

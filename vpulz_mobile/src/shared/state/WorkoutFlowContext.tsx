@@ -5,8 +5,10 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   type ConnectionConfig,
   type ExerciseItem,
@@ -25,6 +27,7 @@ import {
   startWorkoutSession,
   updateSet,
 } from '../api/workoutApi';
+import { searchInternetExerciseLibrary } from '../api/exerciseLibraryApi';
 
 const DEFAULT_CONNECTION: ConnectionConfig = {
   baseUrl: 'http://192.168.1.10:8000',
@@ -48,12 +51,33 @@ type LogSetPayload = {
   completed: boolean;
 };
 
+export type WorkoutSessionState = {
+  id: string;
+  startTime: string;
+  exercises: string[];
+  isActive: boolean;
+  minimized: boolean;
+};
+
+type PersistedWorkoutSessionState = Pick<
+  WorkoutSessionState,
+  'id' | 'startTime' | 'exercises' | 'isActive' | 'minimized'
+>;
+
+const SESSION_STORAGE_KEY = 'vpulz.workout.session.v1';
+
 type WorkoutFlowContextValue = {
   connection: ConnectionConfig;
   setConnection: (next: ConnectionConfig) => void;
+  session: WorkoutSessionState;
+  elapsedSeconds: number;
   busy: boolean;
+  isInitializing: boolean;
   error: string | null;
   clearError: () => void;
+  isWorkoutMinimized: boolean;
+  minimizeWorkout: () => void;
+  restoreWorkout: () => void;
   activeWorkout: WorkoutSession | null;
   workoutState: WorkoutState | null;
   refreshActiveWorkout: () => Promise<WorkoutSession | null>;
@@ -68,6 +92,68 @@ type WorkoutFlowContextValue = {
 };
 
 const WorkoutFlowContext = createContext<WorkoutFlowContextValue | null>(null);
+
+function createSessionId(): string {
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  return `session-${Date.now()}-${randomPart}`;
+}
+
+function createInactiveSession(): WorkoutSessionState {
+  return {
+    id: createSessionId(),
+    startTime: new Date().toISOString(),
+    exercises: [],
+    isActive: false,
+    minimized: false,
+  };
+}
+
+function createActiveSession(overrides?: Partial<WorkoutSessionState>): WorkoutSessionState {
+  return {
+    id: overrides?.id && overrides.id.trim() ? overrides.id : createSessionId(),
+    startTime: overrides?.startTime && overrides.startTime.trim() ? overrides.startTime : new Date().toISOString(),
+    exercises: Array.isArray(overrides?.exercises) ? overrides.exercises : [],
+    isActive: true,
+    minimized: Boolean(overrides?.minimized),
+  };
+}
+
+function normalizeSessionFromWorkout(
+  active: WorkoutSession | null,
+  workout: WorkoutState | null,
+  minimized: boolean
+): WorkoutSessionState {
+  if (!active) {
+    return createInactiveSession();
+  }
+
+  const exercises = workout?.exercises.map((item) => item.name) ?? [];
+  return createActiveSession({
+    id: active.id,
+    startTime: active.start_time,
+    exercises,
+    minimized,
+  });
+}
+
+function toElapsedSeconds(startTime: string): number {
+  const start = new Date(startTime).getTime();
+  if (!Number.isFinite(start)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - start) / 1000));
+}
+
+function toLocalWorkoutSession(connection: ConnectionConfig, session: WorkoutSessionState): WorkoutSession {
+  return {
+    id: session.id,
+    user_id: connection.userId,
+    status: 'active',
+    start_time: session.startTime,
+    end_time: null,
+  };
+}
 
 function requiredConnection(connection: ConnectionConfig): void {
   if (!connection.baseUrl.trim()) {
@@ -88,12 +174,44 @@ function messageFromUnknown(error: unknown): string {
   return 'Unexpected error';
 }
 
+function parsePersistedSession(raw: string): WorkoutSessionState | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedWorkoutSessionState>;
+    const id = typeof parsed.id === 'string' ? parsed.id.trim() : '';
+    const startTime = typeof parsed.startTime === 'string' ? parsed.startTime.trim() : '';
+    const exercises = Array.isArray(parsed.exercises)
+      ? parsed.exercises.filter((item): item is string => typeof item === 'string')
+      : [];
+    const isActive = Boolean(parsed.isActive);
+    const minimized = Boolean(parsed.minimized);
+
+    if (!id || !startTime || !isActive) {
+      return null;
+    }
+
+    return createActiveSession({
+      id,
+      startTime,
+      exercises,
+      minimized,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   const [connection, setConnectionState] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
-  const [busy, setBusy] = useState<boolean>(false);
+  const [session, setSession] = useState<WorkoutSessionState>(() => createInactiveSession());
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
   const [workoutState, setWorkoutState] = useState<WorkoutState | null>(null);
+  const startResumePromiseRef = useRef<Promise<WorkoutSession> | null>(null);
+
+  const busy = pendingCount > 0;
 
   const setConnection = useCallback((next: ConnectionConfig) => {
     setConnectionState({
@@ -104,7 +222,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   }, []);
 
   const runAction = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
-    setBusy(true);
+    setPendingCount((current) => current + 1);
     setError(null);
     try {
       return await fn();
@@ -113,14 +231,33 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       setError(message);
       throw err;
     } finally {
-      setBusy(false);
+      setPendingCount((current) => Math.max(0, current - 1));
     }
   }, []);
 
-  const fetchWorkoutState = useCallback(
+  const fetchWorkoutStateInternal = useCallback(
     async (workoutId: string): Promise<WorkoutState> => {
       const result = await getWorkoutState(connection, workoutId);
       setWorkoutState(result.workout);
+      setSession((current) => {
+        if (!current.isActive || current.id !== result.workout.id) {
+          return current;
+        }
+
+        const nextExercises = result.workout.exercises.map((item) => item.name);
+        const sameExercises =
+          current.exercises.length === nextExercises.length &&
+          current.exercises.every((value, index) => value === nextExercises[index]);
+
+        if (sameExercises) {
+          return current;
+        }
+
+        return {
+          ...current,
+          exercises: nextExercises,
+        };
+      });
       return result.workout;
     },
     [connection]
@@ -134,13 +271,15 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
 
       if (!result.workout) {
         setWorkoutState(null);
+        setSession(createInactiveSession());
         return null;
       }
 
-      await fetchWorkoutState(result.workout.id);
+      const details = await fetchWorkoutStateInternal(result.workout.id);
+      setSession((current) => normalizeSessionFromWorkout(result.workout, details, current.minimized));
       return result.workout;
     });
-  }, [connection, fetchWorkoutState, runAction]);
+  }, [connection, fetchWorkoutStateInternal, runAction]);
 
   const refreshWorkoutState = useCallback(async (): Promise<WorkoutState | null> => {
     return runAction(async () => {
@@ -149,19 +288,67 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         return null;
       }
 
-      return fetchWorkoutState(activeWorkout.id);
+      return fetchWorkoutStateInternal(activeWorkout.id);
     });
-  }, [activeWorkout, fetchWorkoutState, runAction]);
+  }, [activeWorkout, fetchWorkoutStateInternal, runAction]);
 
   const startOrResumeWorkout = useCallback(async (): Promise<WorkoutSession> => {
-    return runAction(async () => {
+    if (startResumePromiseRef.current) {
+      return startResumePromiseRef.current;
+    }
+
+    const promise = runAction(async () => {
+      if (activeWorkout) {
+        setSession((current) => (current.minimized ? { ...current, minimized: false } : current));
+        return activeWorkout;
+      }
+
+      if (session.isActive) {
+        try {
+          const restored = await fetchWorkoutStateInternal(session.id);
+          setActiveWorkout(restored);
+          setSession((current) => ({
+            ...normalizeSessionFromWorkout(restored, restored, current.minimized),
+            minimized: false,
+          }));
+          return restored;
+        } catch {
+          const localWorkout = toLocalWorkoutSession(connection, session);
+          setActiveWorkout(localWorkout);
+          return localWorkout;
+        }
+      }
+
       requiredConnection(connection);
-      const started = await startWorkoutSession(connection, connection.userId);
-      setActiveWorkout(started.workout);
-      await fetchWorkoutState(started.workout.id);
-      return started.workout;
+      try {
+        const started = await startWorkoutSession(connection, connection.userId);
+        setActiveWorkout(started.workout);
+        await fetchWorkoutStateInternal(started.workout.id);
+        setSession(
+          createActiveSession({
+            id: started.workout.id,
+            startTime: started.workout.start_time,
+            minimized: false,
+          })
+        );
+        return started.workout;
+      } catch {
+        const fallbackSession = createActiveSession({ minimized: false });
+        const localWorkout = toLocalWorkoutSession(connection, fallbackSession);
+        setSession(fallbackSession);
+        setActiveWorkout(localWorkout);
+        setWorkoutState(null);
+        return localWorkout;
+      }
+    }).finally(() => {
+      if (startResumePromiseRef.current === promise) {
+        startResumePromiseRef.current = null;
+      }
     });
-  }, [connection, fetchWorkoutState, runAction]);
+
+    startResumePromiseRef.current = promise;
+    return promise;
+  }, [activeWorkout, connection, fetchWorkoutStateInternal, runAction, session]);
 
   const finishActiveWorkout = useCallback(async (): Promise<WorkoutSession> => {
     return runAction(async () => {
@@ -172,6 +359,8 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       const finished = await finishWorkoutSession(connection, activeWorkout.id);
       setActiveWorkout(null);
       setWorkoutState(null);
+      setSession(createInactiveSession());
+      setElapsedSeconds(0);
       return finished.workout;
     });
   }, [activeWorkout, connection, runAction]);
@@ -181,17 +370,15 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       await runAction(async () => {
         let targetWorkout = activeWorkout;
         if (!targetWorkout) {
-          requiredConnection(connection);
-          const started = await startWorkoutSession(connection, connection.userId);
-          targetWorkout = started.workout;
-          setActiveWorkout(started.workout);
+          const resumed = await startOrResumeWorkout();
+          targetWorkout = resumed;
         }
 
         await addExerciseToWorkout(connection, targetWorkout.id, payload);
-        await fetchWorkoutState(targetWorkout.id);
+        await fetchWorkoutStateInternal(targetWorkout.id);
       });
     },
-    [activeWorkout, connection, fetchWorkoutState, runAction]
+    [activeWorkout, connection, fetchWorkoutStateInternal, runAction, startOrResumeWorkout]
   );
 
   const logSetForActiveWorkout = useCallback(
@@ -206,11 +393,11 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           workout_id: workoutId,
           ...payload,
         });
-        await fetchWorkoutState(workoutId);
+        await fetchWorkoutStateInternal(workoutId);
         return result;
       });
     },
-    [activeWorkout, connection, fetchWorkoutState, runAction]
+    [activeWorkout, connection, fetchWorkoutStateInternal, runAction]
   );
 
   const patchSetLog = useCallback(
@@ -218,19 +405,31 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       return runAction(async () => {
         const result = await updateSet(connection, setId, payload);
         if (activeWorkout) {
-          await fetchWorkoutState(activeWorkout.id);
+          await fetchWorkoutStateInternal(activeWorkout.id);
         }
         return result;
       });
     },
-    [activeWorkout, connection, fetchWorkoutState, runAction]
+    [activeWorkout, connection, fetchWorkoutStateInternal, runAction]
   );
 
   const searchExerciseLibrary = useCallback(
     async (query?: string, muscleGroup?: string): Promise<ExerciseItem[]> => {
       return runAction(async () => {
+        try {
+          const internet = await searchInternetExerciseLibrary(query, muscleGroup, 30);
+          if (internet.length > 0) {
+            return internet;
+          }
+        } catch {
+          // Fall back to backend search when internet source fails.
+        }
+
         const result = await searchExercises(connection, query, muscleGroup, 30);
-        return result.exercises;
+        return result.exercises.map((item) => ({
+          ...item,
+          source: 'backend',
+        }));
       });
     },
     [connection, runAction]
@@ -248,16 +447,161 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
-    void refreshActiveWorkout().catch(() => undefined);
-  }, [refreshActiveWorkout]);
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      setIsInitializing(true);
+      try {
+        const raw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+        const hydratedSession = raw ? parsePersistedSession(raw) : null;
+
+        if (!cancelled && hydratedSession) {
+          setSession(hydratedSession);
+          setElapsedSeconds(toElapsedSeconds(hydratedSession.startTime));
+          setActiveWorkout(toLocalWorkoutSession(connection, hydratedSession));
+          setWorkoutState(null);
+        }
+
+        try {
+          requiredConnection(connection);
+          const active = await getActiveWorkout(connection, connection.userId);
+          if (cancelled) {
+            return;
+          }
+
+          if (!active.workout) {
+            if (!hydratedSession) {
+              setActiveWorkout(null);
+              setWorkoutState(null);
+              setSession(createInactiveSession());
+            }
+            return;
+          }
+
+          setActiveWorkout(active.workout);
+          const details = await fetchWorkoutStateInternal(active.workout.id);
+          if (cancelled) {
+            return;
+          }
+
+          setSession((current) => normalizeSessionFromWorkout(active.workout, details, current.minimized));
+        } catch (networkError: unknown) {
+          if (!cancelled && !hydratedSession) {
+            setSession(createInactiveSession());
+            setError(messageFromUnknown(networkError));
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setSession(createInactiveSession());
+        }
+      } finally {
+        if (!cancelled) {
+          setIsInitializing(false);
+        }
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, fetchWorkoutStateInternal]);
+
+  useEffect(() => {
+    if (!session.isActive) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    setElapsedSeconds(toElapsedSeconds(session.startTime));
+    const timer = setInterval(() => {
+      setElapsedSeconds(toElapsedSeconds(session.startTime));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [session.isActive, session.startTime]);
+
+  useEffect(() => {
+    if (!session.isActive) {
+      void AsyncStorage.removeItem(SESSION_STORAGE_KEY).catch(() => undefined);
+      return;
+    }
+
+    const payload: PersistedWorkoutSessionState = {
+      id: session.id,
+      startTime: session.startTime,
+      exercises: session.exercises,
+      isActive: session.isActive,
+      minimized: session.minimized,
+    };
+
+    void AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload)).catch(() => undefined);
+  }, [session]);
+
+  useEffect(() => {
+    if (!activeWorkout && !workoutState) {
+      return;
+    }
+
+    const nextSession = normalizeSessionFromWorkout(activeWorkout, workoutState, session.minimized);
+    setSession((current) => {
+      const sameExercises =
+        current.exercises.length === nextSession.exercises.length &&
+        current.exercises.every((value, index) => value === nextSession.exercises[index]);
+
+      if (
+        current.id === nextSession.id &&
+        current.startTime === nextSession.startTime &&
+        current.isActive === nextSession.isActive &&
+        current.minimized === nextSession.minimized &&
+        sameExercises
+      ) {
+        return current;
+      }
+
+      return nextSession;
+    });
+  }, [activeWorkout, workoutState, session.minimized]);
+
+  const minimizeWorkout = useCallback(() => {
+    setSession((current) => {
+      if (!current.isActive || current.minimized) {
+        return current;
+      }
+      return {
+        ...current,
+        minimized: true,
+      };
+    });
+  }, []);
+
+  const restoreWorkout = useCallback(() => {
+    setSession((current) => {
+      if (!current.minimized) {
+        return current;
+      }
+      return {
+        ...current,
+        minimized: false,
+      };
+    });
+  }, []);
 
   const value = useMemo<WorkoutFlowContextValue>(
     () => ({
       connection,
       setConnection,
+      session,
+      elapsedSeconds,
       busy,
+      isInitializing,
       error,
       clearError,
+      isWorkoutMinimized: session.minimized,
+      minimizeWorkout,
+      restoreWorkout,
       activeWorkout,
       workoutState,
       refreshActiveWorkout,
@@ -273,9 +617,14 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     [
       connection,
       setConnection,
+      session,
+      elapsedSeconds,
       busy,
+      isInitializing,
       error,
       clearError,
+      minimizeWorkout,
+      restoreWorkout,
       activeWorkout,
       workoutState,
       refreshActiveWorkout,

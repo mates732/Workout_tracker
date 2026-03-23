@@ -50,6 +50,11 @@ export interface ExerciseItem {
   muscle_group: string;
   equipment: string;
   instructions: string;
+  image_url?: string | null;
+  image_urls?: string[];
+  video_url?: string | null;
+  video_urls?: string[];
+  source?: 'backend' | 'internet';
 }
 
 export interface SetFeedback {
@@ -143,6 +148,8 @@ type RequestOptions = {
   body?: unknown;
 };
 
+const REQUEST_TIMEOUT_MS = 12000;
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
 }
@@ -176,16 +183,40 @@ function asApiMessage(errorPayload: unknown): string {
 async function request<T>(config: ConnectionConfig, path: string, options: RequestOptions = {}): Promise<T> {
   const url = buildUrl(config.baseUrl, path, options.query);
   const method = options.method ?? 'GET';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.token}`,
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.token}`,
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    const isAbortError =
+      (typeof error === 'object' &&
+        error !== null &&
+        'name' in error &&
+        (error as { name?: string }).name === 'AbortError') ||
+      false;
+
+    if (isAbortError) {
+      throw new ApiError('Request timed out. Check backend URL and connectivity.', 0, { url });
+    }
+
+    throw new ApiError('Network request failed. Check backend URL and connectivity.', 0, {
+      cause: error instanceof Error ? error.message : 'unknown',
+      url,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const textPayload = await response.text();
   const jsonPayload = textPayload ? (JSON.parse(textPayload) as unknown) : null;
