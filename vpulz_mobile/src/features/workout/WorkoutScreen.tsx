@@ -1,707 +1,544 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
+  Image,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  Vibration,
   View,
 } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
-import type { RootStackParamList } from '../../app/navigation/RootNavigator';
-import type {
-  ExerciseItem,
-  LoggedSet,
-  SetFeedback,
-  SetSuggestion,
-  WorkoutExerciseState,
-  WorkoutState,
-} from '../../shared/api/workoutApi';
-import {
-  AppButton,
-  AppCard,
-  AppChip,
-  AppInput,
-  StickyActionBar,
-} from '../../shared/components/ui';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
-import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
+import type { ExerciseItem, LoggedSet, WorkoutExerciseState } from '../../shared/api/workoutApi';
+import type { RootStackParamList } from '../../app/navigation/RootNavigator';
+import { useDeviceReader } from '../../shared/device/useDeviceReader';
 
 type WorkoutNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-type EditableField = 'weight' | 'reps';
+type SetType = 'N' | 'W' | 'D' | 'F';
 
-type EditingCell = {
-  exerciseId: string;
-  setId: string;
-  field: EditableField;
-  value: string;
+type DraftSet = {
+  weight: string;
+  reps: string;
 };
 
-const EQUIPMENT_FILTERS = ['all', 'barbell', 'dumbbell', 'machine', 'cable', 'bodyweight'];
-const BASE_MUSCLE_FILTERS = ['all', 'chest', 'back', 'legs', 'shoulders', 'arms', 'core'];
+const TYPE_CYCLE: SetType[] = ['N', 'W', 'D', 'F'];
 
-function parseFloatSafe(value: string): number {
-  const parsed = Number.parseFloat(value.replace(',', '.').trim());
-  return Number.isFinite(parsed) ? parsed : 0;
+function parsePositiveFloat(value: string): number {
+  const parsed = Number.parseFloat(value.trim().replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function parseIntSafe(value: string): number {
+function parsePositiveInt(value: string): number {
   const parsed = Number.parseInt(value.trim(), 10);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function sessionSummary(workout: WorkoutState): {
-  durationMinutes: number;
-  totalVolume: number;
-  totalSets: number;
-  personalRecord: string | null;
-  insight: string | null;
-} {
-  const rows = workout.exercises.flatMap((exercise) =>
-    exercise.sets
-      .filter((setItem) => setItem.completed)
-      .map((setItem) => ({ ...setItem, exerciseName: exercise.name }))
+function nextType(type: SetType): SetType {
+  const index = TYPE_CYCLE.indexOf(type);
+  return TYPE_CYCLE[(index + 1) % TYPE_CYCLE.length];
+}
+
+type LoggedSetRowProps = {
+  index: number;
+  item: LoggedSet;
+};
+
+const LoggedSetRow = memo(function LoggedSetRow({ index, item }: LoggedSetRowProps) {
+  return (
+    <View style={[styles.row, item.completed ? styles.rowCompleted : styles.rowDefault]}>
+      <View style={styles.setTypePill}>
+        <Text style={styles.setTypeText}>{index + 1}</Text>
+      </View>
+      <Text style={[styles.valueText, styles.weightCell]}>{item.weight}</Text>
+      <Text style={[styles.valueText, styles.repsCell]}>{item.reps}</Text>
+      <View style={styles.checkButtonDone}>
+        <Text style={styles.checkTextDone}>✓</Text>
+      </View>
+    </View>
   );
+});
 
-  const totalVolume = rows.reduce((sum, row) => sum + row.weight * row.reps, 0);
-  const totalSets = rows.length;
+type QuickSetRowProps = {
+  exercise: WorkoutExerciseState;
+  setType: SetType;
+  draft: DraftSet;
+  locked: boolean;
+  onSetTypePress: () => void;
+  onWeightChange: (value: string) => void;
+  onRepsChange: (value: string) => void;
+  onCheck: () => void;
+};
 
-  const startMs = new Date(workout.start_time).getTime();
-  const endMs = workout.end_time ? new Date(workout.end_time).getTime() : Date.now();
-  const durationMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
+const QuickSetRow = memo(function QuickSetRow({
+  exercise,
+  setType,
+  draft,
+  locked,
+  onSetTypePress,
+  onWeightChange,
+  onRepsChange,
+  onCheck,
+}: QuickSetRowProps) {
+  const setNumber = exercise.sets.length + 1;
 
-  const strongest = [...rows].sort((a, b) => b.weight - a.weight || b.reps - a.reps)[0];
-  const personalRecord = strongest
-    ? `${strongest.exerciseName} ${strongest.weight} kg x ${strongest.reps}`
-    : null;
+  return (
+    <View style={[styles.row, locked ? styles.rowCompleted : styles.rowDefault]}>
+      <Pressable style={styles.setTypePill} onPress={onSetTypePress} disabled={locked}>
+        <Text style={styles.setTypeText}>{setNumber}{setType}</Text>
+      </Pressable>
 
-  let insight = 'Add one more set to keep momentum.';
-  if (totalSets >= 14) {
-    insight = 'Big session output. You held volume really well.';
-  } else if (totalSets >= 8) {
-    insight = 'Strong pacing. This is quality work.';
-  } else if (totalSets > 0) {
-    insight = 'Short but effective session. Consistency wins.';
-  }
+      <TextInput
+        value={draft.weight}
+        onChangeText={onWeightChange}
+        editable={!locked}
+        keyboardType="decimal-pad"
+        style={[styles.input, styles.weightCell, locked && styles.inputLocked]}
+        placeholder="0"
+        placeholderTextColor="#666"
+        returnKeyType="next"
+      />
 
-  return {
-    durationMinutes,
-    totalVolume,
-    totalSets,
-    personalRecord,
-    insight,
-  };
-}
+      <TextInput
+        value={draft.reps}
+        onChangeText={onRepsChange}
+        editable={!locked}
+        keyboardType="number-pad"
+        style={[styles.input, styles.repsCell, locked && styles.inputLocked]}
+        placeholder="0"
+        placeholderTextColor="#666"
+        returnKeyType="done"
+      />
 
-function startedAt(iso: string): string {
-  const date = new Date(iso);
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function toInitials(label: string): string {
-  const chunks = label
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '');
-  return chunks.join('') || 'EX';
-}
-
-function previousLabel(exercise: WorkoutExerciseState): string {
-  const first = exercise.sets[0];
-  if (!first) {
-    return 'No previous data';
-  }
-  return `${first.weight}kg x ${first.reps}`;
-}
+      <Pressable style={[styles.checkButton, locked && styles.checkButtonDone]} onPress={onCheck} disabled={locked}>
+        <Text style={[styles.checkText, locked && styles.checkTextDone]}>✓</Text>
+      </Pressable>
+    </View>
+  );
+});
 
 export function WorkoutScreen() {
   const navigation = useNavigation<WorkoutNavigationProp>();
   const {
-    connection,
+    activeWorkout,
+    workoutState,
     busy,
     error,
     clearError,
-    activeWorkout,
-    workoutState,
+    isWorkoutMinimized,
+    minimizeWorkout,
+    restoreWorkout,
     startOrResumeWorkout,
     finishActiveWorkout,
-    refreshWorkoutState,
     addExerciseToActiveWorkout,
     logSetForActiveWorkout,
-    patchSetLog,
     searchExerciseLibrary,
   } = useWorkoutFlow();
+  const { safeAreaPadding, horizontalGutter } = useDeviceReader();
 
+  const [typesByExercise, setTypesByExercise] = useState<Record<string, SetType>>({});
+  const [draftsByExercise, setDraftsByExercise] = useState<Record<string, DraftSet>>({});
+  const [lockedByExercise, setLockedByExercise] = useState<Record<string, boolean>>({});
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [libraryQuery, setLibraryQuery] = useState('');
-  const [selectedMuscle, setSelectedMuscle] = useState('all');
-  const [selectedEquipment, setSelectedEquipment] = useState('all');
   const [libraryLoading, setLibraryLoading] = useState(false);
-  const [libraryRows, setLibraryRows] = useState<ExerciseItem[]>([]);
-  const [favoriteIds, setFavoriteIds] = useState<Record<number, boolean>>({});
-  const [recentItems, setRecentItems] = useState<ExerciseItem[]>([]);
-  const [hiddenSetIds, setHiddenSetIds] = useState<Record<string, boolean>>({});
-  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
-  const [feedbackByExerciseId, setFeedbackByExerciseId] = useState<Record<string, SetFeedback>>({});
-  const [suggestionByExerciseId, setSuggestionByExerciseId] = useState<Record<string, SetSuggestion>>({});
+  const [libraryItems, setLibraryItems] = useState<ExerciseItem[]>([]);
+  const [libraryQuery, setLibraryQuery] = useState('');
+  const [muscleFilter, setMuscleFilter] = useState('all');
+  const [equipmentFilter, setEquipmentFilter] = useState('all');
+  const [selectedById, setSelectedById] = useState<Record<number, boolean>>({});
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [customName, setCustomName] = useState('');
-  const [customMuscle, setCustomMuscle] = useState('');
-  const [customEquipment, setCustomEquipment] = useState('');
-
-  const commitLock = useRef(false);
-
-  const orderedExercises = useMemo(
+  const exercises = useMemo(
     () => [...(workoutState?.exercises ?? [])].sort((a, b) => a.ordering - b.ordering),
     [workoutState?.exercises]
   );
 
-  const dynamicMuscles = useMemo(() => {
-    const extras = libraryRows
-      .map((item) => item.muscle_group.toLowerCase())
-      .filter((item) => !BASE_MUSCLE_FILTERS.includes(item));
-    return [...BASE_MUSCLE_FILTERS, ...extras];
-  }, [libraryRows]);
+  const selectedCount = useMemo(
+    () => Object.values(selectedById).filter(Boolean).length,
+    [selectedById]
+  );
 
-  const filteredLibraryRows = useMemo(() => {
-    let rows = [...libraryRows];
-
-    if (selectedEquipment !== 'all') {
-      rows = rows.filter((item) => item.equipment.toLowerCase().includes(selectedEquipment));
-    }
-
-    rows.sort((a, b) => {
-      const aFav = favoriteIds[a.id] ? 1 : 0;
-      const bFav = favoriteIds[b.id] ? 1 : 0;
-      return bFav - aFav;
+  const muscleOptions = useMemo(() => {
+    const options = new Set<string>(['all']);
+    libraryItems.forEach((item) => {
+      const value = item.muscle_group?.trim().toLowerCase();
+      if (value) {
+        options.add(value);
+      }
     });
+    return Array.from(options).slice(0, 12);
+  }, [libraryItems]);
 
-    return rows;
-  }, [favoriteIds, libraryRows, selectedEquipment]);
+  const equipmentOptions = useMemo(() => {
+    const options = new Set<string>(['all']);
+    libraryItems.forEach((item) => {
+      const value = item.equipment?.trim().toLowerCase();
+      if (value) {
+        options.add(value);
+      }
+    });
+    return Array.from(options).slice(0, 12);
+  }, [libraryItems]);
 
-  useEffect(() => {
-    if (!activeWorkout) {
-      return;
-    }
-    void refreshWorkoutState().catch(() => undefined);
-  }, [activeWorkout, refreshWorkoutState]);
+  const filteredLibraryItems = useMemo(() => {
+    const normalizedQuery = libraryQuery.trim().toLowerCase();
+    return libraryItems.filter((item) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        item.name.toLowerCase().includes(normalizedQuery) ||
+        item.muscle_group.toLowerCase().includes(normalizedQuery) ||
+        item.equipment.toLowerCase().includes(normalizedQuery);
+      const matchesMuscle = muscleFilter === 'all' || item.muscle_group.toLowerCase().includes(muscleFilter);
+      const matchesEquipment =
+        equipmentFilter === 'all' || item.equipment.toLowerCase().includes(equipmentFilter);
+
+      return matchesQuery && matchesMuscle && matchesEquipment;
+    });
+  }, [equipmentFilter, libraryItems, libraryQuery, muscleFilter]);
 
   useEffect(() => {
     if (!libraryOpen) {
       return;
     }
 
-    let mounted = true;
-    const timer = setTimeout(async () => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+
+    searchDebounceRef.current = setTimeout(() => {
       setLibraryLoading(true);
-      try {
-        const found = await searchExerciseLibrary(
-          libraryQuery || undefined,
-          selectedMuscle === 'all' ? undefined : selectedMuscle
-        );
-        if (mounted) {
-          setLibraryRows(found);
-        }
-      } finally {
-        if (mounted) {
+      void searchExerciseLibrary(libraryQuery || undefined, muscleFilter === 'all' ? undefined : muscleFilter)
+        .then((rows) => {
+          setLibraryItems(rows);
+        })
+        .catch(() => {
+          setLibraryItems([]);
+        })
+        .finally(() => {
           setLibraryLoading(false);
-        }
-      }
-    }, 220);
+        });
+    }, 160);
 
     return () => {
-      mounted = false;
-      clearTimeout(timer);
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current);
+      }
     };
-  }, [libraryOpen, libraryQuery, searchExerciseLibrary, selectedMuscle]);
+  }, [libraryOpen, libraryQuery, muscleFilter, searchExerciseLibrary]);
 
-  const onStartWorkout = async () => {
-    await startOrResumeWorkout();
-    Vibration.vibrate(8);
-  };
-
-  const onFinishWorkout = async () => {
-    if (!workoutState) {
-      return;
-    }
-
-    const summary = sessionSummary(workoutState);
-    await finishActiveWorkout();
-    navigation.navigate('WorkoutSummary', summary);
-  };
-
-  const onToggleFavorite = (exerciseId: number) => {
-    setFavoriteIds((current) => ({
-      ...current,
-      [exerciseId]: !current[exerciseId],
-    }));
-  };
-
-  const onAddExercise = async (exercise: ExerciseItem) => {
-    await addExerciseToActiveWorkout({ exercise_id: exercise.id });
-    setRecentItems((current) => {
-      const merged = [exercise, ...current.filter((item) => item.id !== exercise.id)];
-      return merged.slice(0, 6);
-    });
-    setLibraryOpen(false);
-    Vibration.vibrate(8);
-  };
-
-  const onCreateCustomExercise = async () => {
-    const name = customName.trim();
-    if (!name) {
-      return;
-    }
-
-    await addExerciseToActiveWorkout({ exercise_name: name });
-    setCustomName('');
-    setCustomMuscle('');
-    setCustomEquipment('');
-    setCreateOpen(false);
-    setLibraryOpen(false);
-  };
-
-  const onDeleteSet = (setId: string) => {
-    setHiddenSetIds((current) => ({ ...current, [setId]: true }));
-    Vibration.vibrate(6);
-  };
-
-  const onToggleSetDone = async (setId: string, completed: boolean) => {
-    await patchSetLog(setId, { completed: !completed });
-    Vibration.vibrate(8);
-  };
-
-  const onStartCellEdit = (
-    exerciseId: string,
-    setId: string,
-    field: EditableField,
-    current: number
-  ) => {
-    setEditingCell({
-      exerciseId,
-      setId,
-      field,
-      value: String(current),
-    });
-  };
-
-  const onCommitCell = async (
-    exercise: WorkoutExerciseState,
-    setItem: LoggedSet,
-    moveToNextField: boolean
-  ) => {
-    if (!editingCell || commitLock.current) {
-      return;
-    }
-
-    if (editingCell.exerciseId !== exercise.id || editingCell.setId !== setItem.id) {
-      return;
-    }
-
-    commitLock.current = true;
+  const startWorkout = useCallback(async () => {
     try {
-      const field = editingCell.field;
-      if (field === 'weight') {
-        const weight = parseFloatSafe(editingCell.value);
-        if (weight <= 0) {
-          setEditingCell(null);
-          return;
-        }
-        await patchSetLog(setItem.id, { weight });
-
-        if (moveToNextField) {
-          setEditingCell({
-            exerciseId: exercise.id,
-            setId: setItem.id,
-            field: 'reps',
-            value: String(setItem.reps),
-          });
-          return;
-        }
-      }
-
-      if (field === 'reps') {
-        const reps = parseIntSafe(editingCell.value);
-        if (reps <= 0) {
-          setEditingCell(null);
-          return;
-        }
-        await patchSetLog(setItem.id, { reps });
-      }
-
-      setEditingCell(null);
-    } finally {
-      commitLock.current = false;
+      await startOrResumeWorkout();
+    } catch {
+      // Handled by context error state.
     }
-  };
+  }, [startOrResumeWorkout]);
 
-  const onAddSet = async (exercise: WorkoutExerciseState) => {
-    const lastSet = exercise.sets[exercise.sets.length - 1];
-    const suggested = suggestionByExerciseId[exercise.id];
+  const openLibrary = useCallback(async () => {
+    try {
+      if (!activeWorkout) {
+        await startOrResumeWorkout();
+      }
+      setLibraryOpen(true);
+    } catch {
+      // Handled by context error state.
+    }
+  }, [activeWorkout, startOrResumeWorkout]);
 
-    const response = await logSetForActiveWorkout({
-      workout_exercise_id: exercise.id,
-      weight: suggested?.next_weight_kg ?? lastSet?.weight ?? 20,
-      reps: suggested?.next_reps ?? lastSet?.reps ?? 8,
-      rpe: lastSet?.rpe ?? 8,
-      duration: lastSet?.duration ?? 90,
-      completed: true,
+  const toggleLibrarySelection = useCallback((id: number) => {
+    setSelectedById((current) => ({
+      ...current,
+      [id]: !current[id],
+    }));
+  }, []);
+
+  const addSelectedExercises = useCallback(async () => {
+    const selected = filteredLibraryItems.filter((item) => selectedById[item.id]);
+    if (!selected.length) {
+      return;
+    }
+
+    const existingIds = new Set(exercises.map((item) => item.exercise_id));
+    const deduped = selected.filter((item) => !existingIds.has(item.id));
+
+    for (const item of deduped) {
+      await addExerciseToActiveWorkout({ exercise_id: item.id });
+    }
+
+    setSelectedById({});
+    setLibraryOpen(false);
+  }, [addExerciseToActiveWorkout, exercises, filteredLibraryItems, selectedById]);
+
+  const finishWorkout = useCallback(async () => {
+    if (!activeWorkout) {
+      return;
+    }
+
+    try {
+      await finishActiveWorkout();
+      navigation.navigate('WorkoutSummary', {
+        durationMinutes: 0,
+        totalVolume: 0,
+        totalSets: 0,
+        personalRecord: null,
+        insight: null,
+      });
+    } catch {
+      // Handled by context error state.
+    }
+  }, [activeWorkout, finishActiveWorkout, navigation]);
+
+  const onMinimize = useCallback(() => {
+    minimizeWorkout();
+    navigation.navigate('MainTabs');
+  }, [minimizeWorkout, navigation]);
+
+  const toggleType = useCallback((exerciseId: string) => {
+    setTypesByExercise((current) => {
+      const currentType = current[exerciseId] ?? 'N';
+      return {
+        ...current,
+        [exerciseId]: nextType(currentType),
+      };
     });
+  }, []);
 
-    setFeedbackByExerciseId((current) => ({
+  const setDraftWeight = useCallback((exerciseId: string, value: string) => {
+    const numeric = value.replace(/[^0-9.,]/g, '');
+    setDraftsByExercise((current) => ({
       ...current,
-      [exercise.id]: response.feedback,
+      [exerciseId]: {
+        weight: numeric,
+        reps: current[exerciseId]?.reps ?? '8',
+      },
     }));
-    setSuggestionByExerciseId((current) => ({
+  }, []);
+
+  const setDraftReps = useCallback((exerciseId: string, value: string) => {
+    const numeric = value.replace(/[^0-9]/g, '');
+    setDraftsByExercise((current) => ({
       ...current,
-      [exercise.id]: response.suggestion,
+      [exerciseId]: {
+        weight: current[exerciseId]?.weight ?? '20',
+        reps: numeric,
+      },
     }));
-    Vibration.vibrate(10);
-  };
+  }, []);
+
+  const checkSet = useCallback(
+    async (exercise: WorkoutExerciseState) => {
+      const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
+      const weight = parsePositiveFloat(draft.weight);
+      const reps = parsePositiveInt(draft.reps);
+      if (!weight || !reps) {
+        return;
+      }
+
+      setLockedByExercise((current) => ({ ...current, [exercise.id]: true }));
+      try {
+        await logSetForActiveWorkout({
+          workout_exercise_id: exercise.id,
+          weight,
+          reps,
+          rpe: 8,
+          duration: 60,
+          completed: true,
+        });
+
+        setDraftsByExercise((current) => ({
+          ...current,
+          [exercise.id]: { weight: String(weight), reps: String(reps) },
+        }));
+      } catch {
+        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
+        return;
+      }
+
+      setTimeout(() => {
+        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
+      }, 180);
+    },
+    [draftsByExercise, logSetForActiveWorkout]
+  );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView
+      style={[styles.safeArea, { paddingTop: safeAreaPadding.paddingTop, paddingBottom: safeAreaPadding.paddingBottom }]}
+      edges={['top', 'left', 'right', 'bottom']}
+    >
+      <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
+        <View style={styles.header}>
+          <Pressable style={styles.minimizeButton} onPress={onMinimize} disabled={!activeWorkout}>
+            <Text style={[styles.minimizeButtonText, !activeWorkout && styles.minimizeButtonTextDisabled]}>∨</Text>
+          </Pressable>
+          <View>
+            <Text style={styles.title}>Workout</Text>
+            <Text style={styles.subtitle}>{activeWorkout ? 'Session active' : 'Ready'}</Text>
+          </View>
+          <View style={styles.actions}>
+            {!activeWorkout ? (
+              <Pressable style={styles.startButton} onPress={() => void startWorkout()} disabled={busy}>
+                {busy ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Text style={styles.startButtonText}>Start Workout</Text>
+                )}
+              </Pressable>
+            ) : (
+              <View style={styles.activeActions}>
+                <Pressable style={styles.addButton} onPress={() => void openLibrary()}>
+                  <Text style={styles.addButtonText}>+ Add</Text>
+                </Pressable>
+                <Pressable style={styles.finishButton} onPress={() => void finishWorkout()}>
+                  <Text style={styles.finishButtonText}>Finish</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {error ? (
+          <Pressable style={styles.errorBanner} onPress={clearError}>
+            <Text style={styles.errorText}>{error}</Text>
+          </Pressable>
+        ) : null}
+
+        {isWorkoutMinimized ? (
+          <View style={styles.minimizedPlaceholder}>
+            <Text style={styles.minimizedText}>Workout minimized</Text>
+            <Pressable style={styles.restoreButton} onPress={restoreWorkout}>
+              <Text style={styles.restoreButtonText}>Restore</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <ScrollView
-          style={styles.scroll}
           contentContainerStyle={styles.content}
           keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+          pointerEvents={isWorkoutMinimized ? 'none' : 'auto'}
+          style={isWorkoutMinimized ? styles.hiddenScroll : undefined}
         >
-          <View style={styles.topRow}>
-            <View>
-              <Text style={styles.pageTitle}>VPULZ Workout</Text>
-              <Text style={styles.pageSubtitle}>Track faster with inline logging</Text>
-            </View>
-            <Text style={styles.connectionBadge}>{connection.userId}</Text>
-          </View>
-
-          {error ? (
-            <Pressable style={styles.errorBanner} onPress={clearError}>
-              <Text style={styles.errorText}>{error}</Text>
-            </Pressable>
-          ) : null}
-
-          {!activeWorkout ? (
-            <AppCard>
-              <Text style={styles.cardTitle}>Ready to train?</Text>
-              <Text style={styles.cardBody}>Start a new workout and log each set in two taps.</Text>
-              <AppButton onPress={onStartWorkout}>{busy ? 'Starting...' : 'Start Workout'}</AppButton>
-            </AppCard>
-          ) : (
-            <AppCard>
-              <Text style={styles.cardTitle}>Session active</Text>
-              <Text style={styles.cardBody}>Started {startedAt(activeWorkout.start_time)}</Text>
-              <Text style={styles.cardBody}>{orderedExercises.length} exercises in this session</Text>
-            </AppCard>
-          )}
-
-          {orderedExercises.map((exercise) => {
-            const feedback = feedbackByExerciseId[exercise.id];
-            const suggestion = suggestionByExerciseId[exercise.id];
-            const visibleSets = exercise.sets.filter((setItem) => !hiddenSetIds[setItem.id]);
+          {exercises.map((exercise) => {
+            const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
+            const type = typesByExercise[exercise.id] ?? 'N';
+            const locked = Boolean(lockedByExercise[exercise.id]);
 
             return (
-              <AppCard key={exercise.id} style={styles.exerciseCard}>
-                <View style={styles.exerciseHeader}>
-                  <View>
-                    <Text style={styles.exerciseTitle}>{exercise.name}</Text>
-                    <Text style={styles.exerciseSubtitle}>Prev: {previousLabel(exercise)}</Text>
-                  </View>
-                  <Text style={styles.exerciseTag}>{exercise.muscle_group}</Text>
-                </View>
+              <View key={exercise.id} style={styles.exerciseCard}>
+                <Text style={styles.exerciseTitle}>{exercise.name}</Text>
 
-                <View style={styles.tableHeaderRow}>
-                  <Text style={[styles.tableHeaderText, styles.colSet]}>Set</Text>
-                  <Text style={[styles.tableHeaderText, styles.colWeight]}>Weight</Text>
-                  <Text style={[styles.tableHeaderText, styles.colReps]}>Reps</Text>
-                  <Text style={[styles.tableHeaderText, styles.colDone]}>Done</Text>
-                </View>
+                {exercise.sets.map((setItem, index) => (
+                  <LoggedSetRow key={setItem.id} index={index} item={setItem} />
+                ))}
 
-                {visibleSets.map((setItem, index) => {
-                  const editWeight =
-                    editingCell?.exerciseId === exercise.id &&
-                    editingCell?.setId === setItem.id &&
-                    editingCell.field === 'weight';
-                  const editReps =
-                    editingCell?.exerciseId === exercise.id &&
-                    editingCell?.setId === setItem.id &&
-                    editingCell.field === 'reps';
-
-                  return (
-                    <Swipeable
-                      key={setItem.id}
-                      overshootRight={false}
-                      renderRightActions={() => (
-                        <Pressable
-                          style={styles.deleteAction}
-                          onPress={() => onDeleteSet(setItem.id)}
-                          accessibilityRole="button"
-                          accessibilityLabel="Delete set"
-                        >
-                          <Text style={styles.deleteActionText}>Delete</Text>
-                        </Pressable>
-                      )}
-                    >
-                      <View style={[styles.tableRow, setItem.completed && styles.tableRowDone]}>
-                        <Text style={[styles.tableCellText, styles.colSet]}>{index + 1}</Text>
-
-                        <View style={styles.colWeight}>
-                          {editWeight ? (
-                            <TextInput
-                              autoFocus
-                              value={editingCell?.value ?? ''}
-                              onChangeText={(value) =>
-                                setEditingCell((current) => (current ? { ...current, value } : current))
-                              }
-                              onSubmitEditing={() => {
-                                void onCommitCell(exercise, setItem, true);
-                              }}
-                              onBlur={() => {
-                                if (
-                                  editingCell?.exerciseId === exercise.id &&
-                                  editingCell?.setId === setItem.id &&
-                                  editingCell.field === 'weight'
-                                ) {
-                                  void onCommitCell(exercise, setItem, false);
-                                }
-                              }}
-                              keyboardType="decimal-pad"
-                              style={styles.inlineInput}
-                              returnKeyType="next"
-                            />
-                          ) : (
-                            <Pressable
-                              style={styles.inlineCell}
-                              onPress={() => onStartCellEdit(exercise.id, setItem.id, 'weight', setItem.weight)}
-                            >
-                              <Text style={styles.tableCellText}>{setItem.weight}</Text>
-                            </Pressable>
-                          )}
-                        </View>
-
-                        <View style={styles.colReps}>
-                          {editReps ? (
-                            <TextInput
-                              autoFocus
-                              value={editingCell?.value ?? ''}
-                              onChangeText={(value) =>
-                                setEditingCell((current) => (current ? { ...current, value } : current))
-                              }
-                              onSubmitEditing={() => {
-                                void onCommitCell(exercise, setItem, false);
-                              }}
-                              onBlur={() => {
-                                if (
-                                  editingCell?.exerciseId === exercise.id &&
-                                  editingCell?.setId === setItem.id &&
-                                  editingCell.field === 'reps'
-                                ) {
-                                  void onCommitCell(exercise, setItem, false);
-                                }
-                              }}
-                              keyboardType="number-pad"
-                              style={styles.inlineInput}
-                              returnKeyType="done"
-                            />
-                          ) : (
-                            <Pressable
-                              style={styles.inlineCell}
-                              onPress={() => onStartCellEdit(exercise.id, setItem.id, 'reps', setItem.reps)}
-                            >
-                              <Text style={styles.tableCellText}>{setItem.reps}</Text>
-                            </Pressable>
-                          )}
-                        </View>
-
-                        <View style={styles.colDone}>
-                          <Pressable
-                            style={[styles.donePill, setItem.completed && styles.donePillActive]}
-                            onPress={() => onToggleSetDone(setItem.id, setItem.completed)}
-                          >
-                            <Text style={[styles.donePillText, setItem.completed && styles.donePillTextActive]}>
-                              {setItem.completed ? 'OK' : 'Tap'}
-                            </Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    </Swipeable>
-                  );
-                })}
-
-                <AppButton onPress={() => onAddSet(exercise)}>+ Add Set</AppButton>
-
-                {feedback ? (
-                  <Text style={styles.feedbackText}>
-                    Delta: {feedback.difference_weight ?? 0}kg / {feedback.difference_reps ?? 0} reps
-                    {feedback.pr ? ' | PR' : ''}
-                  </Text>
-                ) : null}
-
-                {suggestion ? (
-                  <Text style={styles.suggestionText}>
-                    Suggested next: {suggestion.next_weight_kg}kg x {suggestion.next_reps}
-                  </Text>
-                ) : null}
-              </AppCard>
+                <QuickSetRow
+                  exercise={exercise}
+                  setType={type}
+                  draft={draft}
+                  locked={locked}
+                  onSetTypePress={() => toggleType(exercise.id)}
+                  onWeightChange={(value) => setDraftWeight(exercise.id, value)}
+                  onRepsChange={(value) => setDraftReps(exercise.id, value)}
+                  onCheck={() => void checkSet(exercise)}
+                />
+              </View>
             );
           })}
-        </ScrollView>
 
-        <StickyActionBar>
-          {!activeWorkout ? (
-            <AppButton onPress={onStartWorkout}>{busy ? 'Starting...' : 'Start Workout'}</AppButton>
-          ) : (
-            <View style={styles.stickyRow}>
-              <AppButton style={styles.stickyHalf} variant="secondary" onPress={() => setLibraryOpen(true)}>
-                Add Exercise
-              </AppButton>
-              <AppButton style={styles.stickyHalf} onPress={onFinishWorkout}>
-                Finish Workout
-              </AppButton>
+          {activeWorkout && exercises.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No exercises yet</Text>
+              <Text style={styles.emptySubtitle}>Add exercises first, then log sets instantly.</Text>
             </View>
-          )}
-        </StickyActionBar>
+          ) : null}
+        </ScrollView>
       </View>
 
       <Modal visible={libraryOpen} animationType="slide" transparent onRequestClose={() => setLibraryOpen(false)}>
         <View style={styles.modalOverlay}>
           <Pressable style={styles.modalBackdrop} onPress={() => setLibraryOpen(false)} />
-          <View style={styles.sheet}>
+          <View style={styles.librarySheet}>
             <View style={styles.sheetHandle} />
+            <Text style={styles.libraryTitle}>Exercise Library</Text>
+
+            <TextInput
+              value={libraryQuery}
+              onChangeText={setLibraryQuery}
+              placeholder="Search by keyword"
+              placeholderTextColor="#666"
+              style={styles.librarySearch}
+            />
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {muscleOptions.map((option) => (
+                <Pressable
+                  key={`muscle-${option}`}
+                  style={[styles.filterChip, muscleFilter === option && styles.filterChipActive]}
+                  onPress={() => setMuscleFilter(option)}
+                >
+                  <Text style={[styles.filterChipText, muscleFilter === option && styles.filterChipTextActive]}>{option}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {equipmentOptions.map((option) => (
+                <Pressable
+                  key={`equip-${option}`}
+                  style={[styles.filterChip, equipmentFilter === option && styles.filterChipActive]}
+                  onPress={() => setEquipmentFilter(option)}
+                >
+                  <Text style={[styles.filterChipText, equipmentFilter === option && styles.filterChipTextActive]}>{option}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {libraryLoading ? <Text style={styles.libraryStatus}>Loading...</Text> : null}
 
             <FlatList
-              data={filteredLibraryRows}
+              data={filteredLibraryItems}
               keyExtractor={(item) => String(item.id)}
-              stickyHeaderIndices={[0]}
-              contentContainerStyle={styles.sheetListContent}
-              ListHeaderComponent={
-                <View style={styles.sheetHeader}>
-                  <Text style={styles.sheetTitle}>Exercise Library</Text>
-                  <AppInput
-                    value={libraryQuery}
-                    onChangeText={setLibraryQuery}
-                    placeholder="Search exercises"
-                  />
-
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                    {dynamicMuscles.map((item) => (
-                      <AppChip
-                        key={item}
-                        label={item}
-                        selected={selectedMuscle === item}
-                        onPress={() => setSelectedMuscle(item)}
-                      />
-                    ))}
-                  </ScrollView>
-
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                    {EQUIPMENT_FILTERS.map((item) => (
-                      <AppChip
-                        key={item}
-                        label={item}
-                        selected={selectedEquipment === item}
-                        onPress={() => setSelectedEquipment(item)}
-                      />
-                    ))}
-                  </ScrollView>
-
-                  {recentItems.length ? (
-                    <View style={styles.recentWrap}>
-                      <Text style={styles.recentTitle}>Recent</Text>
-                      <View style={styles.recentItemsRow}>
-                        {recentItems.map((item) => (
-                          <Pressable
-                            key={item.id}
-                            style={styles.recentPill}
-                            onPress={() => {
-                              void onAddExercise(item);
-                            }}
-                          >
-                            <Text style={styles.recentPillText}>{item.name}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
+              style={styles.libraryList}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const selected = Boolean(selectedById[item.id]);
+                return (
+                  <Pressable
+                    style={[styles.libraryRow, selected && styles.libraryRowSelected]}
+                    onPress={() => toggleLibrarySelection(item.id)}
+                  >
+                    {item.image_url ? (
+                      <Image source={{ uri: item.image_url }} style={styles.libraryThumb} resizeMode="cover" />
+                    ) : null}
+                    <View style={styles.libraryMain}>
+                      <Text style={styles.libraryName}>{item.name}</Text>
+                      <Text style={styles.libraryMeta}>{item.muscle_group} • {item.equipment}</Text>
+                      {item.video_url ? <Text style={styles.libraryMeta}>Video available</Text> : null}
                     </View>
-                  ) : null}
-
-                  <AppButton variant="ghost" onPress={() => setCreateOpen(true)}>
-                    + Create Custom Exercise
-                  </AppButton>
-
-                  {libraryLoading ? <Text style={styles.loadingText}>Searching...</Text> : null}
-                </View>
-              }
-              renderItem={({ item }) => (
-                <View style={styles.libraryRow}>
-                  <View style={styles.libraryImage}>
-                    <Text style={styles.libraryImageText}>{toInitials(item.name)}</Text>
-                  </View>
-
-                  <View style={styles.libraryMain}>
-                    <Text style={styles.libraryName}>{item.name}</Text>
-                    <Text style={styles.libraryMeta}>
-                      {item.muscle_group} / {item.equipment}
-                    </Text>
-                  </View>
-
-                  <View style={styles.libraryActions}>
-                    <Pressable
-                      style={styles.favoriteButton}
-                      onPress={() => onToggleFavorite(item.id)}
-                    >
-                      <Text style={styles.favoriteText}>{favoriteIds[item.id] ? 'Fav' : 'Save'}</Text>
-                    </Pressable>
-                    <AppButton
-                      style={styles.addLibraryButton}
-                      onPress={() => {
-                        void onAddExercise(item);
-                      }}
-                    >
-                      Add
-                    </AppButton>
-                  </View>
-                </View>
-              )}
-              ListEmptyComponent={
-                !libraryLoading ? (
-                  <Text style={styles.emptyLibraryText}>No exercises found for this filter.</Text>
-                ) : null
-              }
+                    <View style={[styles.checkmarkCircle, selected && styles.checkmarkCircleActive]}>
+                      <Text style={[styles.checkmarkText, selected && styles.checkmarkTextActive]}>
+                        {selected ? '✓' : ''}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              }}
+              ListEmptyComponent={!libraryLoading ? <Text style={styles.libraryStatus}>No exercises found.</Text> : null}
             />
-          </View>
-        </View>
-      </Modal>
 
-      <Modal visible={createOpen} animationType="slide" transparent onRequestClose={() => setCreateOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={() => setCreateOpen(false)} />
-          <View style={styles.createSheet}>
-            <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>Add Exercise</Text>
-            <AppInput value={customName} onChangeText={setCustomName} placeholder="Exercise name" />
-            <AppInput value={customMuscle} onChangeText={setCustomMuscle} placeholder="Muscle group" />
-            <AppInput value={customEquipment} onChangeText={setCustomEquipment} placeholder="Equipment" />
-            <AppButton variant="ghost" onPress={() => undefined}>
-              Attach image/video (optional)
-            </AppButton>
-
-            <View style={styles.createActions}>
-              <AppButton style={styles.createHalf} variant="secondary" onPress={() => setCreateOpen(false)}>
-                Cancel
-              </AppButton>
-              <AppButton style={styles.createHalf} onPress={onCreateCustomExercise}>
-                Add to Workout
-              </AppButton>
+            <View style={styles.libraryFooter}>
+              <Pressable style={styles.footerButtonSecondary} onPress={() => setLibraryOpen(false)}>
+                <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.footerButtonPrimary} onPress={() => void addSelectedExercises()}>
+                <Text style={styles.footerButtonPrimaryText}>Add Selected ({selectedCount})</Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -713,390 +550,436 @@ export function WorkoutScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#000',
   },
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#000',
+    paddingHorizontal: 14,
+    paddingTop: 8,
   },
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: 140,
-  },
-  topRow: {
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     alignItems: 'center',
+    marginBottom: 10,
+    gap: 10,
   },
-  pageTitle: {
-    color: colors.text,
-    fontSize: typography.title,
-    fontWeight: '700',
-  },
-  pageSubtitle: {
-    color: colors.mutedText,
-    marginTop: 2,
-    fontSize: typography.body,
-  },
-  connectionBadge: {
-    minWidth: 42,
-    textAlign: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: radius.pill,
+  minimizeButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border,
-    color: colors.primary,
-    backgroundColor: colors.backgroundElevated,
-    fontSize: typography.caption,
+    borderColor: '#2a2a2a',
+    backgroundColor: '#000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  minimizeButtonText: {
+    color: '#fff',
+    fontSize: 18,
     fontWeight: '700',
+    lineHeight: 18,
+  },
+  minimizeButtonTextDisabled: {
+    color: '#555',
+  },
+  title: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '700',
+  },
+  subtitle: {
+    color: '#999',
+    fontSize: 12,
+  },
+  actions: {
+    alignItems: 'flex-end',
+  },
+  activeActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  addButton: {
+    minWidth: 72,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  addButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  startButton: {
+    minWidth: 132,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  startButtonText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  finishButton: {
+    minWidth: 96,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  finishButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
   },
   errorBanner: {
-    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#5B2A38',
-    backgroundColor: '#39212A',
-    padding: spacing.sm,
+    borderColor: '#fff',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 10,
   },
   errorText: {
-    color: colors.danger,
-    fontSize: typography.caption,
+    color: '#fff',
+    fontSize: 12,
   },
-  cardTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
+  content: {
+    paddingBottom: 120,
+    gap: 10,
+  },
+  hiddenScroll: {
+    opacity: 0,
+  },
+  minimizedPlaceholder: {
+    borderWidth: 1,
+    borderColor: '#1f1f1f',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    backgroundColor: '#050505',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  minimizedText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  restoreButton: {
+    minWidth: 86,
+    height: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  restoreButtonText: {
+    color: '#fff',
+    fontSize: 12,
     fontWeight: '700',
-  },
-  cardBody: {
-    color: colors.mutedText,
-    fontSize: typography.body,
   },
   exerciseCard: {
-    gap: spacing.sm,
-  },
-  exerciseHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1f1f1f',
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: '#000',
+    gap: 8,
   },
   exerciseTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
-    fontWeight: '700',
-  },
-  exerciseSubtitle: {
-    marginTop: 2,
-    color: colors.mutedText,
-    fontSize: typography.caption,
-  },
-  exerciseTag: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    color: colors.primary,
-    fontSize: typography.caption,
-    textTransform: 'capitalize',
-  },
-  tableHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.sm,
-  },
-  tableHeaderText: {
-    color: colors.mutedText,
-    fontSize: typography.tiny,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    fontWeight: '700',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 50,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
-    paddingHorizontal: spacing.sm,
-    marginTop: 6,
-  },
-  tableRowDone: {
-    borderColor: '#36633A',
-    backgroundColor: '#10261A',
-  },
-  tableCellText: {
-    color: colors.text,
-    fontSize: typography.body,
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
-    textAlign: 'center',
   },
-  colSet: {
-    flex: 0.8,
-  },
-  colWeight: {
-    flex: 1.6,
+  row: {
+    minHeight: 44,
+    borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  colReps: {
-    flex: 1.4,
-    alignItems: 'center',
-  },
-  colDone: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  inlineCell: {
-    minHeight: 38,
-    minWidth: 72,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
     paddingHorizontal: 8,
+    gap: 6,
   },
-  inlineInput: {
-    minHeight: 38,
-    minWidth: 72,
-    borderRadius: radius.sm,
+  rowDefault: {
+    backgroundColor: '#0b0b0b',
     borderWidth: 1,
-    borderColor: colors.primary,
-    backgroundColor: colors.background,
-    color: colors.text,
+    borderColor: '#1f1f1f',
+  },
+  rowCompleted: {
+    backgroundColor: '#16a34a',
+    borderWidth: 1,
+    borderColor: '#16a34a',
+  },
+  setTypePill: {
+    width: 56,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  setTypeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  input: {
+    height: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    color: '#fff',
     textAlign: 'center',
-    paddingHorizontal: 6,
-    fontSize: typography.body,
+    paddingHorizontal: 4,
+    backgroundColor: '#000',
+    fontSize: 15,
     fontWeight: '600',
   },
-  donePill: {
-    minHeight: 34,
-    minWidth: 60,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.background,
-    paddingHorizontal: 8,
+  inputLocked: {
+    color: '#dcfce7',
+    borderColor: '#15803d',
+    backgroundColor: '#15803d',
   },
-  donePillActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary,
-  },
-  donePillText: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    fontWeight: '700',
-  },
-  donePillTextActive: {
-    color: colors.primaryText,
-  },
-  deleteAction: {
-    marginTop: 6,
-    marginLeft: spacing.sm,
-    borderRadius: radius.md,
-    width: 84,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#4A222F',
-    borderWidth: 1,
-    borderColor: '#6B2E3E',
-  },
-  deleteActionText: {
-    color: colors.danger,
-    fontSize: typography.caption,
-    fontWeight: '700',
-  },
-  feedbackText: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-  },
-  suggestionText: {
-    color: colors.primary,
-    fontSize: typography.caption,
+  valueText: {
+    color: '#fff',
+    textAlign: 'center',
+    fontSize: 15,
     fontWeight: '600',
   },
-  stickyRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  stickyHalf: {
+  weightCell: {
     flex: 1,
+  },
+  repsCell: {
+    flex: 1,
+  },
+  checkButton: {
+    width: 38,
+    height: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  checkButtonDone: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
+  checkText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  checkTextDone: {
+    color: '#dcfce7',
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  emptyState: {
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#1f1f1f',
+    borderRadius: 12,
+    padding: 14,
+    backgroundColor: '#050505',
+  },
+  emptyTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  emptySubtitle: {
+    marginTop: 4,
+    color: '#999',
+    fontSize: 12,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(4, 10, 18, 0.58)',
     justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
-  sheet: {
-    maxHeight: '84%',
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
+  librarySheet: {
+    maxHeight: '86%',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderBottomWidth: 0,
-    backgroundColor: colors.background,
-    paddingTop: 8,
-  },
-  createSheet: {
-    maxHeight: '68%',
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderBottomWidth: 0,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
-    paddingTop: 8,
-    paddingBottom: 22,
-    gap: spacing.sm,
+    borderColor: '#1f1f1f',
+    backgroundColor: '#000',
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 20,
   },
   sheetHandle: {
     alignSelf: 'center',
+    width: 48,
     height: 4,
-    width: 54,
-    borderRadius: radius.pill,
-    backgroundColor: '#355373',
-    marginBottom: spacing.sm,
+    borderRadius: 2,
+    backgroundColor: '#3f3f3f',
+    marginBottom: 8,
   },
-  sheetTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
+  libraryTitle: {
+    color: '#fff',
+    fontSize: 18,
     fontWeight: '700',
-    marginBottom: 2,
+    marginBottom: 10,
   },
-  sheetListContent: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: 22,
-    gap: spacing.sm,
-  },
-  sheetHeader: {
-    backgroundColor: colors.background,
-    gap: spacing.sm,
-    paddingBottom: spacing.sm,
-  },
-  chipsRow: {
-    gap: 8,
-    paddingRight: spacing.md,
-  },
-  recentWrap: {
-    gap: 8,
-  },
-  recentTitle: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    textTransform: 'uppercase',
-    fontWeight: '700',
-  },
-  recentItemsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  recentPill: {
-    borderRadius: radius.pill,
+  librarySearch: {
+    height: 42,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
-    paddingVertical: 6,
+    borderColor: '#2a2a2a',
+    color: '#fff',
+    backgroundColor: '#0a0a0a',
     paddingHorizontal: 10,
+    marginBottom: 8,
   },
-  recentPillText: {
-    color: colors.text,
-    fontSize: typography.caption,
-    fontWeight: '600',
+  filterRow: {
+    gap: 8,
+    paddingBottom: 8,
   },
-  loadingText: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-  },
-  libraryRow: {
-    borderRadius: radius.md,
+  filterChip: {
+    height: 30,
+    borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  libraryImage: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
+    borderColor: '#2a2a2a',
+    backgroundColor: '#050505',
+    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  libraryImageText: {
-    color: colors.primary,
-    fontSize: typography.caption,
+  filterChipActive: {
+    borderColor: '#fff',
+    backgroundColor: '#fff',
+  },
+  filterChipText: {
+    color: '#d0d0d0',
+    fontSize: 11,
     fontWeight: '700',
+  },
+  filterChipTextActive: {
+    color: '#000',
+  },
+  libraryList: {
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  libraryRow: {
+    minHeight: 52,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1f1f1f',
+    backgroundColor: '#0a0a0a',
+    paddingHorizontal: 10,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    opacity: 1,
+  },
+  libraryRowSelected: {
+    opacity: 0.55,
+    borderColor: '#fff',
   },
   libraryMain: {
     flex: 1,
-    gap: 2,
+  },
+  libraryThumb: {
+    width: 46,
+    height: 46,
+    borderRadius: 8,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
+    backgroundColor: '#111',
   },
   libraryName: {
-    color: colors.text,
-    fontSize: typography.body,
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '700',
   },
   libraryMeta: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    textTransform: 'capitalize',
+    color: '#a6a6a6',
+    fontSize: 11,
+    marginTop: 2,
   },
-  libraryActions: {
-    gap: 6,
-    alignItems: 'flex-end',
-  },
-  favoriteButton: {
-    minHeight: 30,
-    minWidth: 56,
-    borderRadius: radius.pill,
+  checkmarkCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
+    borderColor: '#5a5a5a',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 10,
+    backgroundColor: '#000',
   },
-  favoriteText: {
-    color: colors.primary,
-    fontSize: typography.tiny,
+  checkmarkCircleActive: {
+    borderColor: '#fff',
+    backgroundColor: '#fff',
+  },
+  checkmarkText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: '700',
-    textTransform: 'uppercase',
+    lineHeight: 14,
   },
-  addLibraryButton: {
-    minWidth: 74,
-    minHeight: 34,
+  checkmarkTextActive: {
+    color: '#000',
   },
-  emptyLibraryText: {
-    marginTop: spacing.md,
-    color: colors.mutedText,
-    textAlign: 'center',
-    fontSize: typography.body,
+  libraryStatus: {
+    color: '#9a9a9a',
+    fontSize: 12,
+    marginTop: 6,
+    marginBottom: 8,
   },
-  createActions: {
+  libraryFooter: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
+    gap: 8,
   },
-  createHalf: {
+  footerButtonSecondary: {
     flex: 1,
+    height: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#4b4b4b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  footerButtonSecondaryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  footerButtonPrimary: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+  },
+  footerButtonPrimaryText: {
+    color: '#000',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

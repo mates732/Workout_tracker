@@ -13,6 +13,17 @@ This directory contains the React Native mobile app scaffold for VPulz.
    npm run start
    ```
 
+## Environment
+
+Create a `.env` file in this folder with:
+
+```bash
+EXPO_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_publishable_key
+```
+
+The app also accepts `EXPO_PUBLIC_SUPABASE_ANON_KEY` as a fallback.
+
 ## Structure
 
 - `src/app/navigation/` - stack + tab navigation setup

@@ -1,187 +1,244 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { ProgressResponse } from '../../shared/api/workoutApi';
-import { AppButton, AppCard, AppChip } from '../../shared/components/ui';
-import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppButton, AppCard } from '../../shared/components/ui';
+import { useDeviceReader } from '../../shared/device/useDeviceReader';
 import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
+import { loadUserAppSettings, saveUserAppSettings, type UserAppSettings } from '../../shared/state/userAppSettingsStore';
 
-type ExerciseOption = {
-  id: number;
-  name: string;
+type CalendarState = 'none' | 'completed' | 'planned';
+
+type CalendarDay = {
+  iso: string;
+  date: Date;
+  state: CalendarState;
+  workoutType: string;
+  exercises: string[];
 };
 
-function calcOneRm(weight: number, reps: number): number {
-  return Math.round(weight * (1 + reps / 30));
+const PPL_WORKOUTS = ['Push', 'Pull', 'Legs'] as const;
+const PPL_EXERCISES: Record<(typeof PPL_WORKOUTS)[number], string[]> = {
+  Push: ['Bench Press', 'Incline Press', 'Overhead Press', 'Triceps Extension'],
+  Pull: ['Pull Up', 'Barbell Row', 'Face Pull', 'Biceps Curl'],
+  Legs: ['Back Squat', 'Romanian Deadlift', 'Leg Press', 'Calf Raise'],
+};
+
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-function formatDay(value: string): string {
-  const date = new Date(value);
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
+function getDefaultWorkoutForDate(dayOfMonth: number, settings: UserAppSettings): { workoutType: string; exercises: string[] } {
+  if (settings.trainingSplit === 'full_body') {
+    return {
+      workoutType: 'Full Body',
+      exercises: ['Squat', 'Bench Press', 'Row', 'Overhead Press'],
+    };
+  }
+
+  if (settings.trainingSplit === 'custom') {
+    return {
+      workoutType: settings.customSplitName || 'Custom Session',
+      exercises: ['Custom Exercise 1', 'Custom Exercise 2', 'Custom Exercise 3'],
+    };
+  }
+
+  const workoutType = PPL_WORKOUTS[(dayOfMonth - 1) % PPL_WORKOUTS.length];
+  return {
+    workoutType,
+    exercises: PPL_EXERCISES[workoutType],
+  };
 }
 
-function BarSeries({
-  points,
-  color,
-  valueKey,
-}: {
-  points: Array<{ timestamp: string; value: number }>;
-  color: string;
-  valueKey: string;
-}) {
-  const peak = Math.max(...points.map((point) => point.value), 1);
+function isPlannedDay(dayOfMonth: number, settings: UserAppSettings): boolean {
+  if (settings.trainingSplit === 'full_body') {
+    return dayOfMonth % 2 === 1;
+  }
 
-  return (
-    <View style={styles.seriesWrap}>
-      {points.map((point) => {
-        const height = Math.max(8, Math.round((point.value / peak) * 82));
-        return (
-          <View key={`${valueKey}-${point.timestamp}-${point.value}`} style={styles.barItem}>
-            <View style={[styles.bar, { height, backgroundColor: color }]} />
-            <Text style={styles.barLabel}>{formatDay(point.timestamp)}</Text>
-            <Text style={styles.barValue}>{Math.round(point.value)}</Text>
-          </View>
-        );
-      })}
-    </View>
-  );
+  if (settings.trainingSplit === 'custom') {
+    return dayOfMonth % 2 === 0;
+  }
+
+  return dayOfMonth % 2 === 1;
+}
+
+function buildMonthCalendar(settings: UserAppSettings): CalendarDay[] {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const days: CalendarDay[] = [];
+
+  for (let day = 1; day <= end.getDate(); day += 1) {
+    const date = new Date(start.getFullYear(), start.getMonth(), day);
+    const iso = toLocalDateKey(date);
+    const defaultWorkout = getDefaultWorkoutForDate(day, settings);
+
+    const workoutType = settings.plannedWorkoutOverrides[iso] ?? defaultWorkout.workoutType;
+    const exercises = settings.plannedExerciseOverrides[iso] ?? defaultWorkout.exercises;
+    const planned = isPlannedDay(day, settings);
+    const completed = Boolean(settings.completedDates[iso]);
+
+    days.push({
+      iso,
+      date,
+      workoutType,
+      exercises,
+      state: completed ? 'completed' : planned ? 'planned' : 'none',
+    });
+  }
+
+  return days;
 }
 
 export function ProgressScreen() {
-  const { workoutState, busy, error, clearError, loadExerciseProgress } = useWorkoutFlow();
-
-  const exerciseOptions = useMemo<ExerciseOption[]>(() => {
-    const mapped = workoutState?.exercises.map((exercise) => ({
-      id: exercise.exercise_id,
-      name: exercise.name,
-    }));
-
-    return mapped ?? [];
-  }, [workoutState?.exercises]);
-
-  const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(null);
-  const [progress, setProgress] = useState<ProgressResponse | null>(null);
+  const [settings, setSettings] = useState<UserAppSettings | null>(null);
+  const [selectedDayIso, setSelectedDayIso] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [exercisesDraft, setExercisesDraft] = useState('');
+  const { safeAreaPadding, horizontalGutter } = useDeviceReader();
 
   useEffect(() => {
-    if (selectedExerciseId || !exerciseOptions.length) {
+    void loadUserAppSettings().then((value) => {
+      setSettings(value);
+    });
+  }, []);
+
+  const calendarDays = useMemo(() => {
+    if (!settings) {
+      return [];
+    }
+    return buildMonthCalendar(settings);
+  }, [settings]);
+
+  const selectedDay = useMemo(
+    () => calendarDays.find((day) => day.iso === selectedDayIso) ?? null,
+    [calendarDays, selectedDayIso]
+  );
+
+  const openDay = (day: CalendarDay) => {
+    if (day.state === 'none') {
       return;
     }
-    setSelectedExerciseId(exerciseOptions[0].id);
-  }, [exerciseOptions, selectedExerciseId]);
+    setSelectedDayIso(day.iso);
+    setTitleDraft(day.workoutType);
+    setExercisesDraft(day.exercises.join(', '));
+  };
 
-  useEffect(() => {
-    if (!selectedExerciseId) {
+  const saveWorkoutEdits = async () => {
+    if (!settings || !selectedDay) {
       return;
     }
 
-    let mounted = true;
-    void (async () => {
-      const data = await loadExerciseProgress(selectedExerciseId);
-      if (mounted) {
-        setProgress(data);
-      }
-    })();
-
-    return () => {
-      mounted = false;
+    const next: UserAppSettings = {
+      ...settings,
+      plannedWorkoutOverrides: {
+        ...settings.plannedWorkoutOverrides,
+        [selectedDay.iso]: titleDraft.trim() || selectedDay.workoutType,
+      },
+      plannedExerciseOverrides: {
+        ...settings.plannedExerciseOverrides,
+        [selectedDay.iso]: exercisesDraft
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      },
     };
-  }, [loadExerciseProgress, selectedExerciseId]);
 
-  const completedSets = useMemo(() => {
-    return (workoutState?.exercises ?? []).flatMap((exercise) =>
-      exercise.sets.filter((setItem) => setItem.completed)
-    );
-  }, [workoutState?.exercises]);
+    setSettings(next);
+    await saveUserAppSettings(next);
+    setSelectedDayIso(null);
+  };
 
-  const totalVolume = useMemo(() => {
-    return completedSets.reduce((sum, item) => sum + item.weight * item.reps, 0);
-  }, [completedSets]);
-
-  const estimated1RM = useMemo(() => {
-    const best = [...completedSets].sort((a, b) => b.weight - a.weight || b.reps - a.reps)[0];
-    if (!best) {
-      return 0;
+  const markCompleted = async () => {
+    if (!settings || !selectedDay) {
+      return;
     }
-    return calcOneRm(best.weight, best.reps);
-  }, [completedSets]);
 
-  const chartWeightPoints = useMemo(() => {
-    return (progress?.weight_over_time ?? []).map((item) => ({
-      timestamp: item.timestamp,
-      value: item.weight,
-    }));
-  }, [progress?.weight_over_time]);
+    const next: UserAppSettings = {
+      ...settings,
+      completedDates: {
+        ...settings.completedDates,
+        [selectedDay.iso]: true,
+      },
+    };
 
-  const chartVolumePoints = useMemo(() => {
-    return (progress?.volume_trend ?? []).map((item) => ({
-      timestamp: item.timestamp,
-      value: item.volume,
-    }));
-  }, [progress?.volume_trend]);
+    setSettings(next);
+    await saveUserAppSettings(next);
+    setSelectedDayIso(null);
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+    <SafeAreaView
+      style={[styles.safeArea, { paddingTop: safeAreaPadding.paddingTop, paddingBottom: safeAreaPadding.paddingBottom }]}
+      edges={['top', 'left', 'right', 'bottom']}
+    >
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingHorizontal: horizontalGutter }]}>
         <View>
-          <Text style={styles.pageTitle}>Analytics</Text>
-          <Text style={styles.pageSubtitle}>Training insights with clean chart data</Text>
-        </View>
-
-        {error ? (
-          <AppCard style={styles.errorCard}>
-            <Text style={styles.errorText}>{error}</Text>
-            <AppButton variant="secondary" onPress={clearError}>
-              Dismiss
-            </AppButton>
-          </AppCard>
-        ) : null}
-
-        <View style={styles.kpiGrid}>
-          <AppCard style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Estimated 1RM</Text>
-            <Text style={styles.kpiValue}>{estimated1RM} kg</Text>
-          </AppCard>
-          <AppCard style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Session Volume</Text>
-            <Text style={styles.kpiValue}>{Math.round(totalVolume)}</Text>
-          </AppCard>
+          <Text style={styles.pageTitle}>Calendar</Text>
+          <Text style={styles.pageSubtitle}>1-month view · Green = completed workout</Text>
         </View>
 
         <AppCard>
-          <Text style={styles.cardTitle}>Exercise Focus</Text>
-          <View style={styles.chipsRow}>
-            {exerciseOptions.map((option) => (
-              <AppChip
-                key={option.id}
-                label={option.name}
-                selected={selectedExerciseId === option.id}
-                onPress={() => setSelectedExerciseId(option.id)}
-              />
+          <Text style={styles.metaText}>Tap a workout circle to roll up details and edit workout/exercises.</Text>
+          <View style={styles.calendarGrid}>
+            {calendarDays.map((day) => (
+              <Pressable
+                key={day.iso}
+                style={[
+                  styles.dayCell,
+                  day.state === 'completed' ? styles.dayCompleted : null,
+                  day.state === 'planned' ? styles.dayPlanned : null,
+                ]}
+                onPress={() => openDay(day)}
+              >
+                <Text style={[styles.dayDate, day.state !== 'none' ? styles.dayDateActive : null]}>{day.date.getDate()}</Text>
+              </Pressable>
             ))}
           </View>
-          <Text style={styles.metaText}>{busy ? 'Loading trends...' : progress?.exercise_name ?? 'No data yet'}</Text>
-        </AppCard>
-
-        <AppCard>
-          <Text style={styles.cardTitle}>Weight Trend</Text>
-          {chartWeightPoints.length ? (
-            <BarSeries points={chartWeightPoints} color={colors.primary} valueKey="weight" />
-          ) : (
-            <Text style={styles.emptyText}>Log a few sessions to unlock this graph.</Text>
-          )}
-        </AppCard>
-
-        <AppCard>
-          <Text style={styles.cardTitle}>Volume Trend</Text>
-          {chartVolumePoints.length ? (
-            <BarSeries points={chartVolumePoints} color="#57B0FF" valueKey="volume" />
-          ) : (
-            <Text style={styles.emptyText}>Volume data will appear after your first workout.</Text>
-          )}
         </AppCard>
       </ScrollView>
+
+      <Modal visible={Boolean(selectedDay)} transparent animationType="fade" onRequestClose={() => setSelectedDayIso(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{selectedDay?.iso}</Text>
+            <Text style={styles.modalHeading}>{titleDraft || selectedDay?.workoutType}</Text>
+
+            <Text style={styles.label}>Workout Type</Text>
+            <TextInput
+              value={titleDraft}
+              onChangeText={setTitleDraft}
+              placeholder="Push / Pull / Legs / Full Body"
+              placeholderTextColor={colors.mutedText}
+              style={styles.input}
+            />
+
+            <Text style={styles.label}>Exercises</Text>
+            <TextInput
+              value={exercisesDraft}
+              onChangeText={setExercisesDraft}
+              placeholder="Comma-separated exercises"
+              placeholderTextColor={colors.mutedText}
+              style={styles.input}
+            />
+
+            <View style={styles.actions}>
+              <AppButton style={styles.half} variant="secondary" onPress={() => setSelectedDayIso(null)}>
+                Close
+              </AppButton>
+              <AppButton style={styles.half} variant="secondary" onPress={() => void markCompleted()}>
+                Mark Done
+              </AppButton>
+              <AppButton style={styles.half} onPress={() => void saveWorkoutEdits()}>
+                Save
+              </AppButton>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -210,80 +267,88 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: typography.body,
   },
-  errorCard: {
-    backgroundColor: '#3A1F2A',
-    borderColor: '#5A2A38',
-  },
-  errorText: {
-    color: colors.danger,
-    fontSize: typography.body,
-  },
-  kpiGrid: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  kpiCard: {
-    flex: 1,
-    gap: 6,
-  },
-  kpiLabel: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  kpiValue: {
-    color: colors.text,
-    fontSize: 30,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  cardTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
-    fontWeight: '700',
-  },
   metaText: {
     color: colors.mutedText,
     fontSize: typography.caption,
   },
-  chipsRow: {
+  calendarGrid: {
+    marginTop: spacing.sm,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  seriesWrap: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-    paddingTop: 4,
-  },
-  barItem: {
-    width: 36,
+  dayCell: {
+    width: '13.3%',
+    minHeight: 54,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
   },
-  bar: {
-    width: 24,
-    borderTopLeftRadius: radius.sm,
-    borderTopRightRadius: radius.sm,
-    shadowColor: colors.glow,
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 1,
+  dayCompleted: {
+    borderColor: colors.success,
+    backgroundColor: colors.success,
   },
-  barLabel: {
-    color: colors.mutedText,
-    fontSize: typography.tiny,
+  dayPlanned: {
+    borderColor: colors.text,
   },
-  barValue: {
-    color: colors.text,
-    fontSize: typography.tiny,
-    fontWeight: '700',
-  },
-  emptyText: {
+  dayDate: {
     color: colors.mutedText,
     fontSize: typography.body,
+    fontWeight: '700',
+  },
+  dayDateActive: {
+    color: colors.primaryText,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: '#000000B3',
+    justifyContent: 'flex-end',
+  },
+  modalCard: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderBottomWidth: 0,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
+  },
+  modalTitle: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
+  modalHeading: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '700',
+  },
+  label: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '600',
+  },
+  input: {
+    minHeight: 44,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.backgroundElevated,
+    color: colors.text,
+    paddingHorizontal: spacing.sm,
+    fontSize: typography.body,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  half: {
+    flex: 1,
   },
 });
