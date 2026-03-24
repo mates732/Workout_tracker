@@ -18,6 +18,7 @@ import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
 import type { ExerciseItem, LoggedSet, WorkoutExerciseState } from '../../shared/api/workoutApi';
 import type { RootStackParamList } from '../../app/navigation/RootNavigator';
 import { useDeviceReader } from '../../shared/device/useDeviceReader';
+import { colors, radius, spacing } from '../../shared/theme/tokens';
 
 type WorkoutNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -294,6 +295,22 @@ export function WorkoutScreen() {
     }
   }, [activeWorkout, finishActiveWorkout, navigation]);
 
+  const viewExerciseDetails = useCallback(
+    (exercise: WorkoutExerciseState) => {
+      // Convert WorkoutExerciseState to ExerciseItem format
+      const exerciseItem: ExerciseItem = {
+        id: exercise.exercise_id,
+        name: exercise.name,
+        muscle_group: exercise.muscle_group,
+        equipment: exercise.equipment,
+        instructions: '',
+        source: 'backend',
+      };
+      navigation.navigate('ExerciseDetail', { exercise: exerciseItem });
+    },
+    [navigation]
+  );
+
   const onMinimize = useCallback(() => {
     minimizeWorkout();
     navigation.navigate('MainTabs');
@@ -430,8 +447,15 @@ export function WorkoutScreen() {
             const locked = Boolean(lockedByExercise[exercise.id]);
 
             return (
-              <View key={exercise.id} style={styles.exerciseCard}>
-                <Text style={styles.exerciseTitle}>{exercise.name}</Text>
+              <Pressable
+                key={exercise.id}
+                style={[styles.exerciseCard, styles.exerciseCardPressable]}
+                onPress={() => viewExerciseDetails(exercise)}
+              >
+                <View style={styles.exerciseHeader}>
+                  <Text style={styles.exerciseTitle}>{exercise.name}</Text>
+                  <Text style={styles.exerciseDetailHint}>→</Text>
+                </View>
 
                 {exercise.sets.map((setItem, index) => (
                   <LoggedSetRow key={setItem.id} index={index} item={setItem} />
@@ -447,7 +471,7 @@ export function WorkoutScreen() {
                   onRepsChange={(value) => setDraftReps(exercise.id, value)}
                   onCheck={() => void checkSet(exercise)}
                 />
-              </View>
+              </Pressable>
             );
           })}
 
@@ -509,24 +533,30 @@ export function WorkoutScreen() {
               renderItem={({ item }) => {
                 const selected = Boolean(selectedById[item.id]);
                 return (
-                  <Pressable
-                    style={[styles.libraryRow, selected && styles.libraryRowSelected]}
-                    onPress={() => toggleLibrarySelection(item.id)}
-                  >
-                    {item.image_url ? (
-                      <Image source={{ uri: item.image_url }} style={styles.libraryThumb} resizeMode="cover" />
-                    ) : null}
-                    <View style={styles.libraryMain}>
-                      <Text style={styles.libraryName}>{item.name}</Text>
-                      <Text style={styles.libraryMeta}>{item.muscle_group} • {item.equipment}</Text>
-                      {item.video_url ? <Text style={styles.libraryMeta}>Video available</Text> : null}
-                    </View>
-                    <View style={[styles.checkmarkCircle, selected && styles.checkmarkCircleActive]}>
+                  <View style={[styles.libraryRow, selected && styles.libraryRowSelected]}>
+                    <Pressable
+                      style={styles.libraryRowContent}
+                      onPress={() => viewExerciseDetails({ ...item, id: String(item.id), workout_id: '', exercise_id: item.id, ordering: 0, sets: [] } as unknown as WorkoutExerciseState)}
+                    >
+                      {item.image_url ? (
+                        <Image source={{ uri: item.image_url }} style={styles.libraryThumb} resizeMode="cover" />
+                      ) : null}
+                      <View style={styles.libraryMain}>
+                        <Text style={styles.libraryName}>{item.name}</Text>
+                        <Text style={styles.libraryMeta}>{item.muscle_group} • {item.equipment}</Text>
+                        {item.video_url ? <Text style={styles.libraryMeta}>Video available</Text> : null}
+                      </View>
+                      <Text style={styles.libraryDetailIcon}>→</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.checkmarkCircle, selected && styles.checkmarkCircleActive]}
+                      onPress={() => toggleLibrarySelection(item.id)}
+                    >
                       <Text style={[styles.checkmarkText, selected && styles.checkmarkTextActive]}>
                         {selected ? '✓' : ''}
                       </Text>
-                    </View>
-                  </Pressable>
+                    </Pressable>
+                  </View>
                 );
               }}
               ListEmptyComponent={!libraryLoading ? <Text style={styles.libraryStatus}>No exercises found.</Text> : null}
@@ -699,10 +729,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     gap: 8,
   },
+  exerciseCardPressable: {
+    opacity: 0.9,
+  },
+  exerciseHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   exerciseTitle: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    flex: 1,
+  },
+  exerciseDetailHint: {
+    color: colors.mutedText,
+    fontSize: 14,
+    marginLeft: spacing.sm,
   },
   row: {
     minHeight: 44,
@@ -893,11 +937,23 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     opacity: 1,
   },
   libraryRowSelected: {
     opacity: 0.55,
     borderColor: '#fff',
+  },
+  libraryRowContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  libraryDetailIcon: {
+    color: colors.mutedText,
+    fontSize: 14,
+    marginRight: spacing.xs,
   },
   libraryMain: {
     flex: 1,

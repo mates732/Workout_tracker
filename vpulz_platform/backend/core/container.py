@@ -8,6 +8,8 @@ from vpulz_platform.backend.ai.orchestrator import AIAssistantOrchestrator
 from vpulz_platform.backend.database.supabase_workflow_repository import SupabaseWorkflowRepository
 from vpulz_platform.backend.database.exercise_repository import ExerciseRepository
 from vpulz_platform.backend.database.profile_repository import UserProfileRepository
+from vpulz_platform.backend.database.wger_repository import WgerRepository
+from vpulz_platform.backend.integrations.wger_client import WgerClient
 from vpulz_platform.backend.agents.coach_agent import CoachAgent
 from vpulz_platform.backend.database.repositories import RoutineRepository, WorkoutRepository
 from vpulz_platform.backend.services.ai_service import AIService
@@ -29,7 +31,9 @@ class ServiceContainer:
     routine_repo: RoutineRepository = field(default_factory=RoutineRepository)
     profile_repo: UserProfileRepository = field(default_factory=UserProfileRepository)
     exercise_repo: ExerciseRepository = field(default_factory=ExerciseRepository)
+    wger_repo: WgerRepository = field(default_factory=WgerRepository)
     supabase_repo: SupabaseWorkflowRepository = field(default_factory=SupabaseWorkflowRepository)
+    wger_client: WgerClient = field(default_factory=lambda: WgerClient(cache_ttl=3600))
     motia: MotiaClient = field(
         default_factory=lambda: MotiaClient(base_url=settings.motia_base_url, api_key=settings.motia_api_key)
     )
