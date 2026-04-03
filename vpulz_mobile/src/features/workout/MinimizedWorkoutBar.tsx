@@ -20,7 +20,7 @@ function formatDuration(seconds: number): string {
 }
 
 export const MinimizedWorkoutBar = memo(function MinimizedWorkoutBar({ onPress }: MinimizedWorkoutBarProps) {
-  const { session, elapsedSeconds, isWorkoutMinimized, restoreWorkout } = useWorkoutFlow();
+  const { session, elapsedSeconds, isWorkoutMinimized, restoreWorkout, currentWorkout, settings } = useWorkoutFlow();
   const insets = useSafeAreaInsets();
 
   const workoutName = useMemo(() => {
@@ -40,7 +40,22 @@ export const MinimizedWorkoutBar = memo(function MinimizedWorkoutBar({ onPress }
     return null;
   }
 
-  const bottomOffset = Math.max(16, insets.bottom + 8);
+  // Keep the minimized bar above bottom tabs so the tab menu stays clickable.
+  const tabBarHeight = 68;
+  const tabBarMarginBottom = 14;
+  const bottomOffset = Math.max(90, insets.bottom + tabBarHeight + tabBarMarginBottom + 8);
+
+  const splitDotColor = (() => {
+    const splitKey = currentWorkout?.plan?.splitKey;
+    const splitColors = settings?.splitConfig?.colors;
+    if (!splitKey || !splitColors) return undefined;
+    if (splitKey.includes('push')) return splitColors.push;
+    if (splitKey.includes('pull')) return splitColors.pull;
+    if (splitKey.includes('leg') || splitKey.includes('legs')) return splitColors.legs;
+    const customColors = settings?.splitConfig?.customColors ?? {};
+    if (customColors && typeof splitKey === 'string' && customColors[splitKey]) return customColors[splitKey];
+    return undefined;
+  })();
 
   return (
     <View style={[styles.wrap, { bottom: bottomOffset }]} pointerEvents="box-none">
@@ -51,12 +66,12 @@ export const MinimizedWorkoutBar = memo(function MinimizedWorkoutBar({ onPress }
           onPress();
         }}
       >
-        <View style={styles.leftDot} />
+        <View style={[styles.leftDot, { backgroundColor: splitDotColor ?? '#fff' }]} />
         <View style={styles.center}>
           <Text style={styles.name} numberOfLines={1}>{workoutName}</Text>
           <Text style={styles.timer}>{formatDuration(elapsedSeconds)}</Text>
         </View>
-        <Text style={styles.chevron}>↑</Text>
+        <Text style={styles.chevron}>^</Text>
       </Pressable>
     </View>
   );
@@ -69,6 +84,7 @@ const styles = StyleSheet.create({
     right: 12,
     bottom: 92,
     zIndex: 100,
+    elevation: 100,
   },
   bar: {
     minHeight: 56,

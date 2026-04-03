@@ -277,11 +277,36 @@ export function GoalsPreferencesScreen() {
       <SettingsCard>
         <SettingsRow label="Custom routines" value={`${settings.calendar.customRoutines.length} saved`} helper="Used when split = custom" />
         <View style={styles.pillRow}>
-          {settings.calendar.customRoutines.map((routine) => (
-            <Pressable key={routine} style={styles.pill} onPress={() => removeCustomRoutine(routine)}>
-              <Text style={styles.pillText}>{routine} ✕</Text>
-            </Pressable>
-          ))}
+          {(() => {
+            const PALETTE = ['#FF6B6B', '#FFB86B', '#FFD86B', '#7AB3FF', '#7AE1AB', '#D9A7FF'];
+            return settings.calendar.customRoutines.map((routine) => {
+              const currentColor = settings.calendar.routineColors?.[routine] ?? PALETTE[0];
+              return (
+                <View key={routine} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Pressable
+                    onPress={() => {
+                      const idx = PALETTE.indexOf(currentColor);
+                      const next = PALETTE[(idx + 1) % PALETTE.length];
+                      updateSettings((current) => ({
+                        ...current,
+                        calendar: {
+                          ...current.calendar,
+                          routineColors: {
+                            ...(current.calendar.routineColors ?? {}),
+                            [routine]: next,
+                          },
+                        },
+                      }));
+                    }}
+                    style={{ width: 28, height: 20, borderRadius: 6, backgroundColor: currentColor, borderWidth: 1, borderColor: '#303030', marginRight: 6 }}
+                  />
+                  <Pressable style={styles.pill} onPress={() => removeCustomRoutine(routine)}>
+                    <Text style={styles.pillText}>{routine} ✕</Text>
+                  </Pressable>
+                </View>
+              );
+            });
+          })()}
         </View>
 
         <TextInput

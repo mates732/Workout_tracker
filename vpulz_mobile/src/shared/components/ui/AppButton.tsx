@@ -1,4 +1,4 @@
-import { PropsWithChildren } from 'react';
+import type { ReactNode } from 'react';
 import {
   Pressable,
   type PressableProps,
@@ -11,14 +11,21 @@ import { colors, radius, typography } from '../../theme/tokens';
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
-type AppButtonProps = PropsWithChildren<
-  PressableProps & {
-    variant?: ButtonVariant;
-    style?: StyleProp<ViewStyle>;
-  }
->;
+type AppButtonProps = PressableProps & {
+  children: ReactNode;
+  variant?: ButtonVariant;
+  style?: StyleProp<ViewStyle>;
+};
 
 export function AppButton({ children, variant = 'primary', style, ...props }: AppButtonProps) {
+  const textStyle = [
+    styles.label,
+    variant === 'primary' && styles.primaryLabel,
+    variant === 'secondary' && styles.secondaryLabel,
+    variant === 'ghost' && styles.ghostLabel,
+    variant === 'danger' && styles.dangerLabel,
+  ];
+
   return (
     <Pressable
       {...props}
@@ -32,17 +39,7 @@ export function AppButton({ children, variant = 'primary', style, ...props }: Ap
         style,
       ]}
     >
-      <Text
-        style={[
-          styles.label,
-          variant === 'primary' && styles.primaryLabel,
-          variant === 'secondary' && styles.secondaryLabel,
-          variant === 'ghost' && styles.ghostLabel,
-          variant === 'danger' && styles.dangerLabel,
-        ]}
-      >
-        {children}
-      </Text>
+      {typeof children === 'string' || typeof children === 'number' ? <Text style={textStyle}>{children}</Text> : children}
     </Pressable>
   );
 }
@@ -54,15 +51,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
-    borderWidth: 1,
+    borderWidth: 0,
   },
   primary: {
-    borderColor: colors.primary,
+    borderColor: 'transparent',
     backgroundColor: colors.primary,
+    borderWidth: 0,
   },
   secondary: {
-    borderColor: colors.border,
+    borderColor: 'rgba(255,255,255,0.06)',
     backgroundColor: colors.backgroundElevated,
+    borderWidth: 1,
   },
   ghost: {
     borderColor: colors.border,

@@ -48,9 +48,9 @@ export function AddExerciseScreen() {
   const [targetFilter, setTargetFilter] = useState('');
   const [customExerciseName, setCustomExerciseName] = useState('');
   const [allExercises, setAllExercises] = useState<ExerciseItem[]>([]);
-  const [selectedCount, setSelectedCount] = useState(0);
   const [favoriteExerciseIds, setFavoriteExerciseIds] = useState<number[]>([]);
   const [recentExerciseIds, setRecentExerciseIds] = useState<number[]>([]);
+  const [selectedExercises, setSelectedExercises] = useState<number[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -150,6 +150,13 @@ export function AddExerciseScreen() {
     });
   };
 
+  const toggleSelect = (exerciseId: number) => {
+    setSelectedExercises((current) => {
+      const exists = current.includes(exerciseId);
+      return exists ? current.filter((id) => id !== exerciseId) : [exerciseId, ...current];
+    });
+  };
+
   const markRecentExercise = (exerciseId: number) => {
     setRecentExerciseIds((current) => {
       const deduped = [exerciseId, ...current.filter((item) => item !== exerciseId)].slice(0, 25);
@@ -172,7 +179,6 @@ export function AddExerciseScreen() {
       markRecentExercise(payload.exercise_id);
     }
 
-    setSelectedCount((count) => count + 1);
 
     if (shouldCloseAfterSelect && navigation.canGoBack()) {
       navigation.goBack();
@@ -186,6 +192,18 @@ export function AddExerciseScreen() {
           navigation.goBack();
         }
       });
+      return;
+    }
+
+    if (selectedExercises.length > 0) {
+      (async () => {
+        for (const id of selectedExercises) {
+          // add without closing on each add
+          // eslint-disable-next-line no-await-in-loop
+          await addExercise({ exercise_id: id }, false);
+        }
+        if (navigation.canGoBack()) navigation.goBack();
+      })();
       return;
     }
 
@@ -262,13 +280,18 @@ export function AddExerciseScreen() {
                 {recentItems.map((item) => (
                   <Pressable
                     key={`recent-${item.id}`}
-                    style={styles.rowCard}
-                    onPress={() => {
-                      void addExercise({ exercise_id: item.id });
-                    }}
+                        style={[styles.rowCard, selectedExercises.includes(item.id) ? styles.rowSelected : null]}
+                        onPress={() => {
+                          toggleSelect(item.id);
+                        }}
                   >
-                    <Text style={styles.rowText}>{item.name}</Text>
-                    <Text style={styles.rowMeta}>{item.muscle_group} • {item.equipment}</Text>
+                        <View style={styles.rowMainInner}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.rowText, selectedExercises.includes(item.id) ? styles.selectedText : null]}>{item.name}</Text>
+                            <Text style={[styles.rowMeta, selectedExercises.includes(item.id) ? styles.selectedMeta : null]}>{item.muscle_group} • {item.equipment}</Text>
+                          </View>
+                          {selectedExercises.includes(item.id) ? <Text style={styles.checkmark}>✓</Text> : null}
+                        </View>
                   </Pressable>
                 ))}
               </View>
@@ -278,18 +301,21 @@ export function AddExerciseScreen() {
               <View style={styles.section}>
                 <Text style={styles.sectionLabel}>Favorites</Text>
                 {favoriteItems.map((item) => (
-                  <View key={`fav-${item.id}`} style={styles.rowBetweenCard}>
+                  <View key={`fav-${item.id}`} style={[styles.rowBetweenCard, selectedExercises.includes(item.id) ? styles.rowSelected : null]}>
                     <Pressable
-                      style={styles.rowMain}
+                      style={[styles.rowMain, styles.rowMainSelectable]}
                       onPress={() => {
-                        void addExercise({ exercise_id: item.id });
+                        toggleSelect(item.id);
                       }}
                     >
-                      <Text style={styles.rowText}>{item.name}</Text>
-                      <Text style={styles.rowMeta}>{item.muscle_group} • {item.equipment}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.rowText, selectedExercises.includes(item.id) ? styles.selectedText : null]}>{item.name}</Text>
+                        <Text style={[styles.rowMeta, selectedExercises.includes(item.id) ? styles.selectedMeta : null]}>{item.muscle_group} • {item.equipment}</Text>
+                      </View>
+                      {selectedExercises.includes(item.id) ? <Text style={styles.checkmark}>✓</Text> : null}
                     </Pressable>
                     <Pressable onPress={() => toggleFavoriteExercise(item.id)}>
-                      <Text style={styles.metaAction}>SAVED</Text>
+                      <Text style={styles.metaAction}>{favoriteExerciseIds.includes(item.id) ? 'SAVED' : 'SAVE'}</Text>
                     </Pressable>
                   </View>
                 ))}
@@ -299,15 +325,18 @@ export function AddExerciseScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionLabel}>Results</Text>
               {filteredResults.map((item) => (
-                <View key={item.id} style={styles.rowBetweenCard}>
+                <View key={item.id} style={[styles.rowBetweenCard, selectedExercises.includes(item.id) ? styles.rowSelected : null]}>
                   <Pressable
-                    style={styles.rowMain}
+                    style={[styles.rowMain, styles.rowMainSelectable]}
                     onPress={() => {
-                      void addExercise({ exercise_id: item.id });
+                      toggleSelect(item.id);
                     }}
                   >
-                    <Text style={styles.rowText}>{item.name}</Text>
-                    <Text style={styles.rowMeta}>{item.muscle_group} • {item.equipment}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.rowText, selectedExercises.includes(item.id) ? styles.selectedText : null]}>{item.name}</Text>
+                      <Text style={[styles.rowMeta, selectedExercises.includes(item.id) ? styles.selectedMeta : null]}>{item.muscle_group} • {item.equipment}</Text>
+                    </View>
+                    {selectedExercises.includes(item.id) ? <Text style={styles.checkmark}>✓</Text> : null}
                   </Pressable>
                   <Pressable onPress={() => toggleFavoriteExercise(item.id)}>
                     <Text style={styles.metaAction}>{favoriteExerciseIds.includes(item.id) ? 'SAVED' : 'SAVE'}</Text>
@@ -340,7 +369,7 @@ export function AddExerciseScreen() {
             onPress={onDone}
           >
             <Text style={styles.bottomButtonText}>
-              {autoOpenLogger ? `Done${selectedCount > 0 ? ` (${selectedCount})` : ''}` : 'Done'}
+              {autoOpenLogger ? `Done${selectedExercises.length > 0 ? ` (${selectedExercises.length})` : ''}` : 'Done'}
             </Text>
           </Pressable>
         </View>
@@ -425,6 +454,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#1F1F1F',
     paddingHorizontal: 12,
   },
+  rowMainInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rowSelected: { backgroundColor: '#1FAF3A', borderColor: '#158B2B' },
+  rowMainSelectable: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  selectedText: { color: '#000000' },
+  selectedMeta: { color: '#0F2A0F' },
+  checkmark: { color: '#000000', fontSize: 18, fontWeight: '900', marginLeft: 12 },
   rowBetweenCard: {
     minHeight: 56,
     flexDirection: 'row',

@@ -1,16 +1,25 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useWorkoutFlow } from '../../../shared/state/WorkoutFlowContext';
 
 type MinimizedWorkoutBarProps = {
   onPress: () => void;
 };
 
 export default function MinimizedWorkoutBar({ onPress }: MinimizedWorkoutBarProps) {
+  const { currentWorkout, settings } = useWorkoutFlow();
+  const splitKey = currentWorkout?.plan?.splitKey;
+  const splitColors = settings?.splitConfig?.colors;
+  const accent = splitKey && splitColors ? (splitKey.includes('push') ? splitColors.push : splitKey.includes('pull') ? splitColors.pull : splitKey.includes('leg') ? splitColors.legs : undefined) : undefined;
+
   return (
     <TouchableOpacity style={styles.bar} onPress={onPress}>
-      <View>
-        <Text style={styles.name}>CURRENT SESSION</Text>
-        <Text style={styles.sub}>PUSH DAY A</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: accent ?? '#FF6B6B' }} />
+        <View>
+          <Text style={styles.name}>CURRENT SESSION</Text>
+          <Text style={styles.sub}>{currentWorkout?.plan?.title ?? 'PUSH DAY A'}</Text>
+        </View>
       </View>
       <Text style={styles.timer}>00:00:00 ▲</Text>
     </TouchableOpacity>

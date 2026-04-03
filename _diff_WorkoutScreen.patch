@@ -1,0 +1,1516 @@
+﻿diff --git a/vpulz_mobile/src/features/workout/WorkoutScreen.tsx b/vpulz_mobile/src/features/workout/WorkoutScreen.tsx
+index a248f2e1..4465ef75 100644
+--- a/vpulz_mobile/src/features/workout/WorkoutScreen.tsx
++++ b/vpulz_mobile/src/features/workout/WorkoutScreen.tsx
+@@ -1,39 +1,68 @@
+-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
++import { useCallback, useEffect, useMemo, useState } from 'react';
+ import {
+-  ActivityIndicator,
+   FlatList,
+-  Image,
+   Modal,
+-  Pressable,
+   ScrollView,
+   StyleSheet,
+   Text,
+-  TextInput,
+   View,
+ } from 'react-native';
+ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { useNavigation } from '@react-navigation/native';
+ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+-import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
+-import type { ExerciseItem, LoggedSet, WorkoutExerciseState } from '../../shared/api/workoutApi';
+-import type { RootStackParamList } from '../../app/navigation/RootNavigator';
++import type { RootStackParamList } from '../../navigation/RootNavigator';
++import { AppButton, AppCard, AppInput, StickyActionBar } from '../../shared/components/ui';
+ import { useDeviceReader } from '../../shared/device/useDeviceReader';
+-import { colors, radius, spacing } from '../../shared/theme/tokens';
++import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
++import type { ExerciseItem, WorkoutExerciseState } from '../../shared/api/workoutApi';
++import { buildInlineCoachMessage } from '../../shared/state/settingsLogic';
++import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
+ 
+ type WorkoutNavigationProp = NativeStackNavigationProp<RootStackParamList>;
+ 
+-type SetType = 'N' | 'W' | 'D' | 'F';
+-
+ type DraftSet = {
+   weight: string;
+   reps: string;
+ };
+ 
+-const TYPE_CYCLE: SetType[] = ['N', 'W', 'D', 'F'];
++const QUICK_EXERCISES: ExerciseItem[] = [
++  { id: 101, name: 'Bench Press', muscle_group: 'Chest', equipment: 'Barbell', instructions: '' },
++  { id: 102, name: 'Incline Dumbbell Press', muscle_group: 'Chest', equipment: 'Dumbbell', instructions: '' },
++  { id: 103, name: 'Push Up', muscle_group: 'Chest', equipment: 'Bodyweight', instructions: '' },
++  { id: 104, name: 'Overhead Press', muscle_group: 'Shoulders', equipment: 'Barbell', instructions: '' },
++  { id: 105, name: 'Dumbbell Shoulder Press', muscle_group: 'Shoulders', equipment: 'Dumbbell', instructions: '' },
++  { id: 106, name: 'Lateral Raise', muscle_group: 'Shoulders', equipment: 'Dumbbell', instructions: '' },
++  { id: 107, name: 'Squat', muscle_group: 'Legs', equipment: 'Barbell', instructions: '' },
++  { id: 108, name: 'Romanian Deadlift', muscle_group: 'Legs', equipment: 'Barbell', instructions: '' },
++  { id: 109, name: 'Deadlift', muscle_group: 'Back', equipment: 'Barbell', instructions: '' },
++  { id: 110, name: 'Leg Press', muscle_group: 'Legs', equipment: 'Machine', instructions: '' },
++  { id: 111, name: 'Walking Lunge', muscle_group: 'Legs', equipment: 'Dumbbell', instructions: '' },
++  { id: 112, name: 'Hip Thrust', muscle_group: 'Glutes', equipment: 'Barbell', instructions: '' },
++  { id: 113, name: 'Pull Up', muscle_group: 'Back', equipment: 'Bodyweight', instructions: '' },
++  { id: 114, name: 'Lat Pulldown', muscle_group: 'Back', equipment: 'Cable', instructions: '' },
++  { id: 115, name: 'Barbell Row', muscle_group: 'Back', equipment: 'Barbell', instructions: '' },
++  { id: 116, name: 'Seated Cable Row', muscle_group: 'Back', equipment: 'Cable', instructions: '' },
++  { id: 117, name: 'Bicep Curl', muscle_group: 'Arms', equipment: 'Dumbbell', instructions: '' },
++  { id: 118, name: 'Triceps Pushdown', muscle_group: 'Arms', equipment: 'Cable', instructions: '' },
++  { id: 119, name: 'Plank', muscle_group: 'Core', equipment: 'Bodyweight', instructions: '' },
++  { id: 120, name: 'Hanging Knee Raise', muscle_group: 'Core', equipment: 'Bodyweight', instructions: '' },
++];
++
++function formatDuration(seconds: number): string {
++  const hours = Math.floor(seconds / 3600);
++  const minutes = Math.floor((seconds % 3600) / 60);
++  const remainder = seconds % 60;
++
++  if (hours > 0) {
++    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
++  }
++
++  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
++}
+ 
+ function parsePositiveFloat(value: string): number {
+   const parsed = Number.parseFloat(value.trim().replace(',', '.'));
+-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
++  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+ }
+ 
+ function parsePositiveInt(value: string): number {
+@@ -41,325 +70,146 @@ function parsePositiveInt(value: string): number {
+   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+ }
+ 
+-function nextType(type: SetType): SetType {
+-  const index = TYPE_CYCLE.indexOf(type);
+-  return TYPE_CYCLE[(index + 1) % TYPE_CYCLE.length];
++function formatProgress(progress: number): string {
++  return `${Math.round(progress * 100)}%`;
+ }
+ 
+-type LoggedSetRowProps = {
+-  index: number;
+-  item: LoggedSet;
+-};
+-
+-const LoggedSetRow = memo(function LoggedSetRow({ index, item }: LoggedSetRowProps) {
+-  return (
+-    <View style={[styles.row, item.completed ? styles.rowCompleted : styles.rowDefault]}>
+-      <View style={styles.setTypePill}>
+-        <Text style={styles.setTypeText}>{index + 1}</Text>
+-      </View>
+-      <Text style={[styles.valueText, styles.weightCell]}>{item.weight}</Text>
+-      <Text style={[styles.valueText, styles.repsCell]}>{item.reps}</Text>
+-      <View style={styles.checkButtonDone}>
+-        <Text style={styles.checkTextDone}>Ôťô</Text>
+-      </View>
+-    </View>
+-  );
+-});
+-
+-type QuickSetRowProps = {
+-  exercise: WorkoutExerciseState;
+-  setType: SetType;
+-  draft: DraftSet;
+-  locked: boolean;
+-  onSetTypePress: () => void;
+-  onWeightChange: (value: string) => void;
+-  onRepsChange: (value: string) => void;
+-  onCheck: () => void;
+-};
+-
+-const QuickSetRow = memo(function QuickSetRow({
+-  exercise,
+-  setType,
+-  draft,
+-  locked,
+-  onSetTypePress,
+-  onWeightChange,
+-  onRepsChange,
+-  onCheck,
+-}: QuickSetRowProps) {
+-  const setNumber = exercise.sets.length + 1;
++function formatSettingLabel(value: string): string {
++  return value.replace(/_/g, ' ');
++}
+ 
++function SetHistoryRow({ index, weight, reps }: { index: number; weight: number; reps: number }) {
+   return (
+-    <View style={[styles.row, locked ? styles.rowCompleted : styles.rowDefault]}>
+-      <Pressable style={styles.setTypePill} onPress={onSetTypePress} disabled={locked}>
+-        <Text style={styles.setTypeText}>{setNumber}{setType}</Text>
+-      </Pressable>
+-
+-      <TextInput
+-        value={draft.weight}
+-        onChangeText={onWeightChange}
+-        editable={!locked}
+-        keyboardType="decimal-pad"
+-        style={[styles.input, styles.weightCell, locked && styles.inputLocked]}
+-        placeholder="0"
+-        placeholderTextColor="#666"
+-        returnKeyType="next"
+-      />
+-
+-      <TextInput
+-        value={draft.reps}
+-        onChangeText={onRepsChange}
+-        editable={!locked}
+-        keyboardType="number-pad"
+-        style={[styles.input, styles.repsCell, locked && styles.inputLocked]}
+-        placeholder="0"
+-        placeholderTextColor="#666"
+-        returnKeyType="done"
+-      />
+-
+-      <Pressable style={[styles.checkButton, locked && styles.checkButtonDone]} onPress={onCheck} disabled={locked}>
+-        <Text style={[styles.checkText, locked && styles.checkTextDone]}>Ôťô</Text>
+-      </Pressable>
++    <View style={styles.setRow}>
++      <Text style={styles.setIndex}>Set {index + 1}</Text>
++      <Text style={styles.setValue}>{weight} kg</Text>
++      <Text style={styles.setValue}>{reps} reps</Text>
+     </View>
+   );
+-});
++}
+ 
+ export function WorkoutScreen() {
+   const navigation = useNavigation<WorkoutNavigationProp>();
+   const {
+     activeWorkout,
+     workoutState,
++    workoutPlan,
++    settings,
++    elapsedSeconds,
+     busy,
+     error,
+     clearError,
+-    isWorkoutMinimized,
+-    minimizeWorkout,
+-    restoreWorkout,
++    latestSetSuggestion,
+     startOrResumeWorkout,
+     finishActiveWorkout,
+     addExerciseToActiveWorkout,
+     logSetForActiveWorkout,
+-    searchExerciseLibrary,
++    minimizeWorkout,
+   } = useWorkoutFlow();
+   const { safeAreaPadding, horizontalGutter } = useDeviceReader();
+ 
+-  const [typesByExercise, setTypesByExercise] = useState<Record<string, SetType>>({});
+   const [draftsByExercise, setDraftsByExercise] = useState<Record<string, DraftSet>>({});
+-  const [lockedByExercise, setLockedByExercise] = useState<Record<string, boolean>>({});
+   const [libraryOpen, setLibraryOpen] = useState(false);
+-  const [libraryLoading, setLibraryLoading] = useState(false);
+-  const [libraryItems, setLibraryItems] = useState<ExerciseItem[]>([]);
+   const [libraryQuery, setLibraryQuery] = useState('');
+-  const [muscleFilter, setMuscleFilter] = useState('all');
+-  const [equipmentFilter, setEquipmentFilter] = useState('all');
+   const [selectedById, setSelectedById] = useState<Record<number, boolean>>({});
+-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const [libraryNotice, setLibraryNotice] = useState<string | null>(null);
++
++  const libraryItems = useMemo(() => {
++    const query = libraryQuery.trim().toLowerCase();
++    if (!query) {
++      return QUICK_EXERCISES;
++    }
++
++    return QUICK_EXERCISES.filter((item) => {
++      const name = item.name.toLowerCase();
++      const group = item.muscle_group.toLowerCase();
++      const equipment = item.equipment.toLowerCase();
++      return name.includes(query) || group.includes(query) || equipment.includes(query);
++    });
++  }, [libraryQuery]);
+ 
+   const exercises = useMemo(
+     () => [...(workoutState?.exercises ?? [])].sort((a, b) => a.ordering - b.ordering),
+     [workoutState?.exercises]
+   );
+ 
+-  const selectedCount = useMemo(
+-    () => Object.values(selectedById).filter(Boolean).length,
+-    [selectedById]
++  const plannedSets = useMemo(
++    () => workoutPlan?.exercises.reduce((sum, exercise) => sum + exercise.targetSets, 0) ?? Math.max(1, exercises.length * 3),
++    [exercises.length, workoutPlan]
+   );
+ 
+-  const muscleOptions = useMemo(() => {
+-    const options = new Set<string>(['all']);
+-    libraryItems.forEach((item) => {
+-      const value = item.muscle_group?.trim().toLowerCase();
+-      if (value) {
+-        options.add(value);
+-      }
+-    });
+-    return Array.from(options).slice(0, 12);
+-  }, [libraryItems]);
+-
+-  const equipmentOptions = useMemo(() => {
+-    const options = new Set<string>(['all']);
+-    libraryItems.forEach((item) => {
+-      const value = item.equipment?.trim().toLowerCase();
+-      if (value) {
+-        options.add(value);
+-      }
+-    });
+-    return Array.from(options).slice(0, 12);
+-  }, [libraryItems]);
+-
+-  const filteredLibraryItems = useMemo(() => {
+-    const normalizedQuery = libraryQuery.trim().toLowerCase();
+-    return libraryItems.filter((item) => {
+-      const matchesQuery =
+-        !normalizedQuery ||
+-        item.name.toLowerCase().includes(normalizedQuery) ||
+-        item.muscle_group.toLowerCase().includes(normalizedQuery) ||
+-        item.equipment.toLowerCase().includes(normalizedQuery);
+-      const matchesMuscle = muscleFilter === 'all' || item.muscle_group.toLowerCase().includes(muscleFilter);
+-      const matchesEquipment =
+-        equipmentFilter === 'all' || item.equipment.toLowerCase().includes(equipmentFilter);
++  const completedSets = useMemo(
++    () => exercises.reduce((sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length, 0),
++    [exercises]
++  );
+ 
+-      return matchesQuery && matchesMuscle && matchesEquipment;
+-    });
+-  }, [equipmentFilter, libraryItems, libraryQuery, muscleFilter]);
++  const progress = Math.min(1, completedSets / Math.max(1, plannedSets));
+ 
+   useEffect(() => {
+-    if (!libraryOpen) {
+-      return;
+-    }
+-
+-    if (searchDebounceRef.current) {
+-      clearTimeout(searchDebounceRef.current);
+-    }
+-
+-    searchDebounceRef.current = setTimeout(() => {
+-      setLibraryLoading(true);
+-      void searchExerciseLibrary(libraryQuery || undefined, muscleFilter === 'all' ? undefined : muscleFilter)
+-        .then((rows) => {
+-          setLibraryItems(rows);
+-        })
+-        .catch(() => {
+-          setLibraryItems([]);
+-        })
+-        .finally(() => {
+-          setLibraryLoading(false);
+-        });
+-    }, 160);
+-
+-    return () => {
+-      if (searchDebounceRef.current) {
+-        clearTimeout(searchDebounceRef.current);
+-      }
+-    };
+-  }, [libraryOpen, libraryQuery, muscleFilter, searchExerciseLibrary]);
+-
+-  const startWorkout = useCallback(async () => {
+-    try {
+-      await startOrResumeWorkout();
+-    } catch {
+-      // Handled by context error state.
+-    }
+-  }, [startOrResumeWorkout]);
+-
+-  const openLibrary = useCallback(async () => {
+-    try {
+-      if (!activeWorkout) {
+-        await startOrResumeWorkout();
+-      }
+-      setLibraryOpen(true);
+-    } catch {
+-      // Handled by context error state.
+-    }
+-  }, [activeWorkout, startOrResumeWorkout]);
+-
+-  const toggleLibrarySelection = useCallback((id: number) => {
+-    setSelectedById((current) => ({
+-      ...current,
+-      [id]: !current[id],
+-    }));
+-  }, []);
+-
+-  const addSelectedExercises = useCallback(async () => {
+-    const selected = filteredLibraryItems.filter((item) => selectedById[item.id]);
+-    if (!selected.length) {
++    if (activeWorkout || busy) {
+       return;
+     }
++    void startOrResumeWorkout();
++  }, [activeWorkout, busy, startOrResumeWorkout]);
+ 
+-    const existingIds = new Set(exercises.map((item) => item.exercise_id));
+-    const deduped = selected.filter((item) => !existingIds.has(item.id));
+-
+-    for (const item of deduped) {
+-      await addExerciseToActiveWorkout({ exercise_id: item.id });
+-    }
+-
+-    setSelectedById({});
+-    setLibraryOpen(false);
+-  }, [addExerciseToActiveWorkout, exercises, filteredLibraryItems, selectedById]);
+-
+-  const finishWorkout = useCallback(async () => {
+-    if (!activeWorkout) {
+-      return;
+-    }
+-
+-    try {
+-      await finishActiveWorkout();
+-      navigation.navigate('WorkoutSummary', {
+-        durationMinutes: 0,
+-        totalVolume: 0,
+-        totalSets: 0,
+-        personalRecord: null,
+-        insight: null,
++  useEffect(() => {
++    setDraftsByExercise((current) => {
++      const next = { ...current };
++      let changed = false;
++
++      exercises.forEach((exercise) => {
++        if (next[exercise.id]) {
++          return;
++        }
++
++        const plannedExercise =
++          workoutPlan?.exercises.find((item) => item.name.toLowerCase() === exercise.name.toLowerCase()) ?? null;
++        next[exercise.id] = {
++          weight: String(plannedExercise?.targetWeightKg ?? 20),
++          reps: String(plannedExercise?.targetReps ?? 8),
++        };
++        changed = true;
+       });
+-    } catch {
+-      // Handled by context error state.
+-    }
+-  }, [activeWorkout, finishActiveWorkout, navigation]);
+-
+-  const viewExerciseDetails = useCallback(
+-    (exercise: WorkoutExerciseState) => {
+-      // Convert WorkoutExerciseState to ExerciseItem format
+-      const exerciseItem: ExerciseItem = {
+-        id: exercise.exercise_id,
+-        name: exercise.name,
+-        muscle_group: exercise.muscle_group,
+-        equipment: exercise.equipment,
+-        instructions: '',
+-        source: 'backend',
+-      };
+-      navigation.navigate('ExerciseDetail', { exercise: exerciseItem });
+-    },
+-    [navigation]
+-  );
+-
+-  const onMinimize = useCallback(() => {
+-    minimizeWorkout();
+-    navigation.navigate('MainTabs');
+-  }, [minimizeWorkout, navigation]);
+ 
+-  const toggleType = useCallback((exerciseId: string) => {
+-    setTypesByExercise((current) => {
+-      const currentType = current[exerciseId] ?? 'N';
+-      return {
+-        ...current,
+-        [exerciseId]: nextType(currentType),
+-      };
++      return changed ? next : current;
+     });
+-  }, []);
+-
+-  const setDraftWeight = useCallback((exerciseId: string, value: string) => {
+-    const numeric = value.replace(/[^0-9.,]/g, '');
+-    setDraftsByExercise((current) => ({
+-      ...current,
+-      [exerciseId]: {
+-        weight: numeric,
+-        reps: current[exerciseId]?.reps ?? '8',
+-      },
+-    }));
+-  }, []);
++  }, [exercises, workoutPlan]);
++
++  const coachMessage = useMemo(
++    () =>
++      buildInlineCoachMessage({
++        plan: workoutPlan,
++        completedSets,
++        totalPlannedSets: plannedSets,
++        elapsedSeconds,
++        latestSuggestion: latestSetSuggestion,
++        settings,
++      }) ?? (settings.ai_coach.enabled ? 'AI Coach: Start with your first lift and log the first working set.' : 'Session ready to log.'),
++    [completedSets, elapsedSeconds, latestSetSuggestion, plannedSets, settings, workoutPlan]
++  );
+ 
+-  const setDraftReps = useCallback((exerciseId: string, value: string) => {
+-    const numeric = value.replace(/[^0-9]/g, '');
++  const setDraftValue = useCallback((exerciseId: string, field: keyof DraftSet, value: string) => {
++    const sanitized = field === 'weight' ? value.replace(/[^0-9.,]/g, '') : value.replace(/[^0-9]/g, '');
+     setDraftsByExercise((current) => ({
+       ...current,
+       [exerciseId]: {
+-        weight: current[exerciseId]?.weight ?? '20',
+-        reps: numeric,
++        weight: field === 'weight' ? sanitized : current[exerciseId]?.weight ?? '20',
++        reps: field === 'reps' ? sanitized : current[exerciseId]?.reps ?? '8',
+       },
+     }));
+   }, []);
+ 
+-  const checkSet = useCallback(
++  const addSet = useCallback(
+     async (exercise: WorkoutExerciseState) => {
+       const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
+       const weight = parsePositiveFloat(draft.weight);
+       const reps = parsePositiveInt(draft.reps);
+-      if (!weight || !reps) {
++      if (reps <= 0) {
+         return;
+       }
+ 
+-      setLockedByExercise((current) => ({ ...current, [exercise.id]: true }));
+       try {
+-        await logSetForActiveWorkout({
++        const result = await logSetForActiveWorkout({
+           workout_exercise_id: exercise.id,
+           weight,
+           reps,
+@@ -370,205 +220,254 @@ export function WorkoutScreen() {
+ 
+         setDraftsByExercise((current) => ({
+           ...current,
+-          [exercise.id]: { weight: String(weight), reps: String(reps) },
++          [exercise.id]: {
++            weight: String(result.suggestion.next_weight_kg),
++            reps: String(result.suggestion.next_reps),
++          },
+         }));
+       } catch {
+-        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
+-        return;
++        // Error state is surfaced by WorkoutFlowContext.
+       }
+-
+-      setTimeout(() => {
+-        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
+-      }, 180);
+     },
+     [draftsByExercise, logSetForActiveWorkout]
+   );
+ 
++  const openExerciseLibrary = useCallback(() => {
++    setLibraryNotice(null);
++    setSelectedById({});
++    setLibraryOpen(true);
++  }, []);
++
++  const toggleLibrarySelection = useCallback((id: number) => {
++    setSelectedById((current) => ({
++      ...current,
++      [id]: !current[id],
++    }));
++  }, []);
++
++  const addSelectedExercises = useCallback(async () => {
++    const selectedItems = libraryItems.filter((item) => selectedById[item.id]);
++
++    if (!selectedItems.length) {
++      if (libraryQuery.trim()) {
++        try {
++          await addExerciseToActiveWorkout({ exercise_name: libraryQuery.trim() });
++          setLibraryOpen(false);
++          setLibraryQuery('');
++        } catch {
++          setLibraryNotice('Could not add that exercise right now.');
++        }
++      } else {
++        setLibraryNotice('Select an exercise or type a custom name.');
++      }
++      return;
++    }
++
++    for (const item of selectedItems) {
++      await addExerciseToActiveWorkout({
++        exercise_id: item.id,
++        exercise_name: item.name,
++        muscle_group: item.muscle_group,
++        equipment: item.equipment,
++      });
++    }
++
++    setLibraryOpen(false);
++    setSelectedById({});
++    setLibraryNotice(null);
++  }, [addExerciseToActiveWorkout, libraryItems, libraryQuery, selectedById]);
++
++  const finishWorkout = useCallback(async () => {
++    try {
++      const result = await finishActiveWorkout();
++      navigation.navigate('WorkoutSummary', {
++        summary: result.summary,
++        nextPlan: result.nextPlan,
++      });
++    } catch {
++      // Error state is surfaced by WorkoutFlowContext.
++    }
++  }, [finishActiveWorkout, navigation]);
++
++  const onMinimize = useCallback(() => {
++    minimizeWorkout();
++    navigation.navigate('MainTabs');
++  }, [minimizeWorkout, navigation]);
++
+   return (
+     <SafeAreaView
+-      style={[styles.safeArea, { paddingTop: safeAreaPadding.paddingTop, paddingBottom: safeAreaPadding.paddingBottom }]}
+-      edges={['top', 'left', 'right', 'bottom']}
++      style={[styles.safeArea, { paddingTop: safeAreaPadding.paddingTop }]}
++      edges={['top', 'left', 'right']}
+     >
+-      <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
++      <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}>
+         <View style={styles.header}>
+-          <Pressable style={styles.minimizeButton} onPress={onMinimize} disabled={!activeWorkout}>
+-            <Text style={[styles.minimizeButtonText, !activeWorkout && styles.minimizeButtonTextDisabled]}>ÔłĘ</Text>
+-          </Pressable>
+-          <View>
+-            <Text style={styles.title}>Workout</Text>
+-            <Text style={styles.subtitle}>{activeWorkout ? 'Session active' : 'Ready'}</Text>
+-          </View>
+-          <View style={styles.actions}>
+-            {!activeWorkout ? (
+-              <Pressable style={styles.startButton} onPress={() => void startWorkout()} disabled={busy}>
+-                {busy ? (
+-                  <ActivityIndicator size="small" color="#000" />
+-                ) : (
+-                  <Text style={styles.startButtonText}>Start Workout</Text>
+-                )}
+-              </Pressable>
+-            ) : (
+-              <View style={styles.activeActions}>
+-                <Pressable style={styles.addButton} onPress={() => void openLibrary()}>
+-                  <Text style={styles.addButtonText}>+ Add</Text>
+-                </Pressable>
+-                <Pressable style={styles.finishButton} onPress={() => void finishWorkout()}>
+-                  <Text style={styles.finishButtonText}>Finish</Text>
+-                </Pressable>
+-              </View>
+-            )}
++          <View style={styles.headerCopy}>
++            <Text style={styles.title}>{workoutPlan?.title ?? 'Workout'}</Text>
++            <Text style={styles.subtitle}>{workoutPlan?.summary ?? 'Adaptive session, generated from your settings.'}</Text>
+           </View>
++          <AppButton variant="secondary" onPress={onMinimize}>
++            Minimize
++          </AppButton>
+         </View>
+ 
++        <AppCard>
++          <View style={styles.statusRow}>
++            <View style={styles.statusBlock}>
++              <Text style={styles.statusLabel}>Timer</Text>
++              <Text style={styles.statusValue}>{formatDuration(elapsedSeconds)}</Text>
++            </View>
++            <View style={styles.statusBlock}>
++              <Text style={styles.statusLabel}>Progress</Text>
++              <Text style={styles.statusValue}>
++                {completedSets}/{plannedSets} sets
++              </Text>
++            </View>
++            <View style={styles.statusBlock}>
++              <Text style={styles.statusLabel}>Plan</Text>
++              <Text style={styles.statusValue}>{formatProgress(progress)}</Text>
++            </View>
++          </View>
++          <View style={styles.progressTrack}>
++            <View style={[styles.progressFill, { width: `${Math.max(8, progress * 100)}%` }]} />
++          </View>
++        </AppCard>
++
++        <AppCard>
++          <Text style={styles.coachLabel}>AI Coach</Text>
++          <Text style={styles.coachText}>{coachMessage}</Text>
++          <Text style={styles.coachMeta}>
++            {`Driving this session: ${formatSettingLabel(settings.profile.goal)} | ${settings.profile.level} | ${settings.workout.equipment} | ${settings.workout.session_duration_min} min`}
++          </Text>
++          <Text style={styles.coachMeta}>{workoutPlan?.recoveryNote ?? 'Finish clean reps and the next workout will adapt automatically.'}</Text>
++        </AppCard>
++
+         {error ? (
+-          <Pressable style={styles.errorBanner} onPress={clearError}>
++          <AppCard style={styles.errorCard}>
+             <Text style={styles.errorText}>{error}</Text>
+-          </Pressable>
+-        ) : null}
+-
+-        {isWorkoutMinimized ? (
+-          <View style={styles.minimizedPlaceholder}>
+-            <Text style={styles.minimizedText}>Workout minimized</Text>
+-            <Pressable style={styles.restoreButton} onPress={restoreWorkout}>
+-              <Text style={styles.restoreButtonText}>Restore</Text>
+-            </Pressable>
+-          </View>
++            <AppButton variant="secondary" onPress={clearError}>
++              Dismiss
++            </AppButton>
++          </AppCard>
+         ) : null}
+ 
+         <ScrollView
+           contentContainerStyle={styles.content}
++          showsVerticalScrollIndicator={false}
+           keyboardShouldPersistTaps="handled"
+-          pointerEvents={isWorkoutMinimized ? 'none' : 'auto'}
+-          style={isWorkoutMinimized ? styles.hiddenScroll : undefined}
+         >
+-          {exercises.map((exercise) => {
+-            const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
+-            const type = typesByExercise[exercise.id] ?? 'N';
+-            const locked = Boolean(lockedByExercise[exercise.id]);
+-
+-            return (
+-              <Pressable
+-                key={exercise.id}
+-                style={[styles.exerciseCard, styles.exerciseCardPressable]}
+-                onPress={() => viewExerciseDetails(exercise)}
+-              >
+-                <View style={styles.exerciseHeader}>
+-                  <Text style={styles.exerciseTitle}>{exercise.name}</Text>
+-                  <Text style={styles.exerciseDetailHint}>Ôćĺ</Text>
+-                </View>
++          {!exercises.length ? (
++            <AppCard>
++              <Text style={styles.emptyTitle}>Workout is ready.</Text>
++              <Text style={styles.emptyBody}>Tap "Add Exercise" to insert a lift instantly, then log sets to trigger AI adjustments.</Text>
++            </AppCard>
++          ) : null}
+ 
+-                {exercise.sets.map((setItem, index) => (
+-                  <LoggedSetRow key={setItem.id} index={index} item={setItem} />
+-                ))}
++          {exercises.map((exercise) => {
++              const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
++              const plannedExercise =
++                workoutPlan?.exercises.find((item) => item.name.toLowerCase() === exercise.name.toLowerCase()) ?? null;
++              const exerciseSuggestion =
++                latestSetSuggestion?.context.workout_state.workout_id === exercise.name
++                  ? latestSetSuggestion.adjustments[0]
++                  : plannedExercise?.coachCue;
++
++              return (
++                <AppCard key={exercise.id}>
++                  <View style={styles.exerciseHeader}>
++                    <View style={styles.exerciseCopy}>
++                      <Text style={styles.exerciseTitle}>{exercise.name}</Text>
++                      <Text style={styles.exerciseMeta}>{`${exercise.muscle_group} | ${exercise.equipment}`}</Text>
++                    </View>
++                    <View style={styles.targetPill}>
++                      <Text style={styles.targetText}>
++                        {plannedExercise?.targetSets ?? 3} x {plannedExercise?.targetReps ?? 8}
++                      </Text>
++                    </View>
++                  </View>
+ 
+-                <QuickSetRow
+-                  exercise={exercise}
+-                  setType={type}
+-                  draft={draft}
+-                  locked={locked}
+-                  onSetTypePress={() => toggleType(exercise.id)}
+-                  onWeightChange={(value) => setDraftWeight(exercise.id, value)}
+-                  onRepsChange={(value) => setDraftReps(exercise.id, value)}
+-                  onCheck={() => void checkSet(exercise)}
+-                />
+-              </Pressable>
+-            );
+-          })}
++                  <Text style={styles.exerciseCoachLine}>AI Coach: {exerciseSuggestion ?? 'Match the target before adding load.'}</Text>
++
++                  {exercise.sets.map((setItem, index) => (
++                    <SetHistoryRow key={setItem.id} index={index} weight={setItem.weight} reps={setItem.reps} />
++                  ))}
++
++                  <View style={styles.quickLogRow}>
++                    <AppInput
++                      style={styles.quickInput}
++                      value={draft.weight}
++                      onChangeText={(value) => setDraftValue(exercise.id, 'weight', value)}
++                      keyboardType="decimal-pad"
++                      placeholder="Weight"
++                    />
++                    <AppInput
++                      style={styles.quickInput}
++                      value={draft.reps}
++                      onChangeText={(value) => setDraftValue(exercise.id, 'reps', value)}
++                      keyboardType="number-pad"
++                      placeholder="Reps"
++                    />
++                  </View>
+ 
+-          {activeWorkout && exercises.length === 0 ? (
+-            <View style={styles.emptyState}>
+-              <Text style={styles.emptyTitle}>No exercises yet</Text>
+-              <Text style={styles.emptySubtitle}>Add exercises first, then log sets instantly.</Text>
+-            </View>
+-          ) : null}
++                  <AppButton variant="secondary" onPress={() => void addSet(exercise)}>
++                    + Add Set
++                  </AppButton>
++                </AppCard>
++              );
++            })}
+         </ScrollView>
++
++        <StickyActionBar>
++          <View style={styles.footerActions}>
++            <AppButton variant="secondary" style={styles.footerButton} onPress={openExerciseLibrary}>
++              Add Exercise
++            </AppButton>
++            <AppButton style={styles.footerButton} onPress={() => void finishWorkout()}>
++              Finish Workout
++            </AppButton>
++          </View>
++        </StickyActionBar>
+       </View>
+ 
+       <Modal visible={libraryOpen} animationType="slide" transparent onRequestClose={() => setLibraryOpen(false)}>
+         <View style={styles.modalOverlay}>
+-          <Pressable style={styles.modalBackdrop} onPress={() => setLibraryOpen(false)} />
+-          <View style={styles.librarySheet}>
+-            <View style={styles.sheetHandle} />
+-            <Text style={styles.libraryTitle}>Exercise Library</Text>
+-
+-            <TextInput
++          <View style={styles.modalSheet}>
++            <Text style={styles.modalTitle}>Add Exercise</Text>
++            <AppInput
+               value={libraryQuery}
+               onChangeText={setLibraryQuery}
+-              placeholder="Search by keyword"
+-              placeholderTextColor="#666"
+-              style={styles.librarySearch}
++              placeholder="Search or type a custom exercise"
+             />
+-
+-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+-              {muscleOptions.map((option) => (
+-                <Pressable
+-                  key={`muscle-${option}`}
+-                  style={[styles.filterChip, muscleFilter === option && styles.filterChipActive]}
+-                  onPress={() => setMuscleFilter(option)}
+-                >
+-                  <Text style={[styles.filterChipText, muscleFilter === option && styles.filterChipTextActive]}>{option}</Text>
+-                </Pressable>
+-              ))}
+-            </ScrollView>
+-
+-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+-              {equipmentOptions.map((option) => (
+-                <Pressable
+-                  key={`equip-${option}`}
+-                  style={[styles.filterChip, equipmentFilter === option && styles.filterChipActive]}
+-                  onPress={() => setEquipmentFilter(option)}
+-                >
+-                  <Text style={[styles.filterChipText, equipmentFilter === option && styles.filterChipTextActive]}>{option}</Text>
+-                </Pressable>
+-              ))}
+-            </ScrollView>
+-
+-            {libraryLoading ? <Text style={styles.libraryStatus}>Loading...</Text> : null}
+-
+             <FlatList
+-              data={filteredLibraryItems}
++              data={libraryItems}
+               keyExtractor={(item) => String(item.id)}
+-              style={styles.libraryList}
+               keyboardShouldPersistTaps="handled"
++              style={styles.libraryList}
+               renderItem={({ item }) => {
+                 const selected = Boolean(selectedById[item.id]);
+                 return (
+-                  <View style={[styles.libraryRow, selected && styles.libraryRowSelected]}>
+-                    <Pressable
+-                      style={styles.libraryRowContent}
+-                      onPress={() => viewExerciseDetails({ ...item, id: String(item.id), workout_id: '', exercise_id: item.id, ordering: 0, sets: [] } as unknown as WorkoutExerciseState)}
+-                    >
+-                      {item.image_url ? (
+-                        <Image source={{ uri: item.image_url }} style={styles.libraryThumb} resizeMode="cover" />
+-                      ) : null}
+-                      <View style={styles.libraryMain}>
+-                        <Text style={styles.libraryName}>{item.name}</Text>
+-                        <Text style={styles.libraryMeta}>{item.muscle_group} ÔÇó {item.equipment}</Text>
+-                        {item.video_url ? <Text style={styles.libraryMeta}>Video available</Text> : null}
++                  <AppCard style={[styles.libraryCard, selected && styles.libraryCardSelected]}>
++                    <View style={styles.libraryRow}>
++                      <View style={styles.exerciseCopy}>
++                        <Text style={styles.exerciseTitle}>{item.name}</Text>
++                        <Text style={styles.exerciseMeta}>{`${item.muscle_group} | ${item.equipment}`}</Text>
+                       </View>
+-                      <Text style={styles.libraryDetailIcon}>Ôćĺ</Text>
+-                    </Pressable>
+-                    <Pressable
+-                      style={[styles.checkmarkCircle, selected && styles.checkmarkCircleActive]}
+-                      onPress={() => toggleLibrarySelection(item.id)}
+-                    >
+-                      <Text style={[styles.checkmarkText, selected && styles.checkmarkTextActive]}>
+-                        {selected ? 'Ôťô' : ''}
+-                      </Text>
+-                    </Pressable>
+-                  </View>
++                      <AppButton variant={selected ? 'primary' : 'secondary'} onPress={() => toggleLibrarySelection(item.id)}>
++                        {selected ? 'Selected' : 'Select'}
++                      </AppButton>
++                    </View>
++                  </AppCard>
+                 );
+               }}
+-              ListEmptyComponent={!libraryLoading ? <Text style={styles.libraryStatus}>No exercises found.</Text> : null}
++              ListEmptyComponent={<Text style={styles.modalMeta}>No matches yet. You can add the typed name as a custom exercise.</Text>}
+             />
+-
+-            <View style={styles.libraryFooter}>
+-              <Pressable style={styles.footerButtonSecondary} onPress={() => setLibraryOpen(false)}>
+-                <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
+-              </Pressable>
+-              <Pressable style={styles.footerButtonPrimary} onPress={() => void addSelectedExercises()}>
+-                <Text style={styles.footerButtonPrimaryText}>Add Selected ({selectedCount})</Text>
+-              </Pressable>
++            {libraryNotice ? <Text style={styles.modalMeta}>{libraryNotice}</Text> : null}
++            <View style={styles.footerActions}>
++              <AppButton variant="secondary" style={styles.footerButton} onPress={() => setLibraryOpen(false)}>
++                Cancel
++              </AppButton>
++              <AppButton style={styles.footerButton} onPress={() => void addSelectedExercises()}>
++                Add Exercise
++              </AppButton>
+             </View>
+           </View>
+         </View>
+@@ -580,462 +479,225 @@ export function WorkoutScreen() {
+ const styles = StyleSheet.create({
+   safeArea: {
+     flex: 1,
+-    backgroundColor: '#000',
++    backgroundColor: colors.background,
+   },
+   container: {
+     flex: 1,
+-    backgroundColor: '#000',
+-    paddingHorizontal: 14,
+-    paddingTop: 8,
+   },
+   header: {
+     flexDirection: 'row',
+-    justifyContent: 'flex-start',
+     alignItems: 'center',
+-    marginBottom: 10,
+-    gap: 10,
+-  },
+-  minimizeButton: {
+-    width: 34,
+-    height: 34,
+-    borderRadius: 8,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    backgroundColor: '#000',
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-  },
+-  minimizeButtonText: {
+-    color: '#fff',
+-    fontSize: 18,
+-    fontWeight: '700',
+-    lineHeight: 18,
++    justifyContent: 'space-between',
++    gap: spacing.sm,
++    paddingTop: spacing.sm,
++    paddingBottom: spacing.sm,
+   },
+-  minimizeButtonTextDisabled: {
+-    color: '#555',
++  headerCopy: {
++    flex: 1,
++    gap: 4,
+   },
+   title: {
+-    color: '#fff',
+-    fontSize: 28,
++    color: colors.text,
++    fontSize: typography.title,
+     fontWeight: '700',
+   },
+   subtitle: {
+-    color: '#999',
+-    fontSize: 12,
+-  },
+-  actions: {
+-    alignItems: 'flex-end',
++    color: colors.mutedText,
++    fontSize: typography.body,
++    lineHeight: 22,
+   },
+-  activeActions: {
++  statusRow: {
+     flexDirection: 'row',
+-    alignItems: 'center',
+-    gap: 8,
+-  },
+-  addButton: {
+-    minWidth: 72,
+-    height: 42,
+-    borderRadius: 10,
+-    borderWidth: 1,
+-    borderColor: '#fff',
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#000',
++    gap: spacing.sm,
+   },
+-  addButtonText: {
+-    color: '#fff',
+-    fontWeight: '700',
+-    fontSize: 13,
++  statusBlock: {
++    flex: 1,
++    gap: 4,
+   },
+-  startButton: {
+-    minWidth: 132,
+-    height: 42,
+-    borderRadius: 10,
+-    backgroundColor: '#fff',
+-    alignItems: 'center',
+-    justifyContent: 'center',
++  statusLabel: {
++    color: colors.mutedText,
++    fontSize: typography.tiny,
++    textTransform: 'uppercase',
++    letterSpacing: 0.5,
+   },
+-  startButtonText: {
+-    color: '#000',
++  statusValue: {
++    color: colors.text,
++    fontSize: typography.body,
+     fontWeight: '700',
+-    fontSize: 13,
+   },
+-  finishButton: {
+-    minWidth: 96,
+-    height: 42,
+-    borderRadius: 10,
++  progressTrack: {
++    height: 10,
++    borderRadius: radius.pill,
++    backgroundColor: colors.backgroundElevated,
+     borderWidth: 1,
+-    borderColor: '#fff',
+-    alignItems: 'center',
+-    justifyContent: 'center',
++    borderColor: colors.border,
++    overflow: 'hidden',
+   },
+-  finishButtonText: {
+-    color: '#fff',
+-    fontWeight: '700',
+-    fontSize: 13,
++  progressFill: {
++    height: '100%',
++    backgroundColor: colors.primary,
+   },
+-  errorBanner: {
+-    borderWidth: 1,
+-    borderColor: '#fff',
+-    padding: 10,
+-    borderRadius: 10,
+-    marginBottom: 10,
+-  },
+-  errorText: {
+-    color: '#fff',
+-    fontSize: 12,
++  coachLabel: {
++    color: colors.mutedText,
++    fontSize: typography.caption,
++    fontWeight: '700',
++    textTransform: 'uppercase',
++    letterSpacing: 0.5,
+   },
+-  content: {
+-    paddingBottom: 120,
+-    gap: 10,
++  coachText: {
++    color: colors.text,
++    fontSize: typography.body,
++    lineHeight: 24,
+   },
+-  hiddenScroll: {
+-    opacity: 0,
++  coachMeta: {
++    color: colors.mutedText,
++    fontSize: typography.caption,
++    lineHeight: 18,
+   },
+-  minimizedPlaceholder: {
+-    borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-    borderRadius: 12,
+-    padding: 14,
+-    marginBottom: 10,
+-    backgroundColor: '#050505',
+-    flexDirection: 'row',
+-    alignItems: 'center',
+-    justifyContent: 'space-between',
++  errorCard: {
++    borderColor: '#5D2632',
+   },
+-  minimizedText: {
+-    color: '#fff',
+-    fontSize: 13,
+-    fontWeight: '600',
++  errorText: {
++    color: colors.text,
++    fontSize: typography.caption,
++    lineHeight: 18,
+   },
+-  restoreButton: {
+-    minWidth: 86,
+-    height: 34,
+-    borderRadius: 8,
+-    borderWidth: 1,
+-    borderColor: '#fff',
++  loaderWrap: {
++    flex: 1,
+     alignItems: 'center',
+     justifyContent: 'center',
++    gap: spacing.sm,
++  },
++  loaderText: {
++    color: colors.mutedText,
++    fontSize: typography.body,
+   },
+-  restoreButtonText: {
+-    color: '#fff',
+-    fontSize: 12,
++  emptyTitle: {
++    color: colors.text,
++    fontSize: typography.subtitle,
+     fontWeight: '700',
+   },
+-  exerciseCard: {
+-    borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-    borderRadius: 12,
+-    padding: 10,
+-    backgroundColor: '#000',
+-    gap: 8,
++  emptyBody: {
++    color: colors.mutedText,
++    fontSize: typography.body,
++    lineHeight: 22,
+   },
+-  exerciseCardPressable: {
+-    opacity: 0.9,
++  content: {
++    gap: spacing.md,
++    paddingBottom: 150,
+   },
+   exerciseHeader: {
+     flexDirection: 'row',
+     alignItems: 'center',
+     justifyContent: 'space-between',
++    gap: spacing.sm,
+   },
+-  exerciseTitle: {
+-    color: '#fff',
+-    fontSize: 16,
+-    fontWeight: '600',
+-    flex: 1,
+-  },
+-  exerciseDetailHint: {
+-    color: colors.mutedText,
+-    fontSize: 14,
+-    marginLeft: spacing.sm,
+-  },
+-  row: {
+-    minHeight: 44,
+-    borderRadius: 10,
+-    flexDirection: 'row',
+-    alignItems: 'center',
+-    paddingHorizontal: 8,
+-    gap: 6,
+-  },
+-  rowDefault: {
+-    backgroundColor: '#0b0b0b',
+-    borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-  },
+-  rowCompleted: {
+-    backgroundColor: '#16a34a',
+-    borderWidth: 1,
+-    borderColor: '#16a34a',
+-  },
+-  setTypePill: {
+-    width: 56,
+-    height: 32,
+-    borderRadius: 8,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#000',
+-  },
+-  setTypeText: {
+-    color: '#fff',
+-    fontSize: 12,
+-    fontWeight: '700',
+-  },
+-  input: {
+-    height: 34,
+-    borderRadius: 8,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    color: '#fff',
+-    textAlign: 'center',
+-    paddingHorizontal: 4,
+-    backgroundColor: '#000',
+-    fontSize: 15,
+-    fontWeight: '600',
+-  },
+-  inputLocked: {
+-    color: '#dcfce7',
+-    borderColor: '#15803d',
+-    backgroundColor: '#15803d',
+-  },
+-  valueText: {
+-    color: '#fff',
+-    textAlign: 'center',
+-    fontSize: 15,
+-    fontWeight: '600',
+-  },
+-  weightCell: {
++  exerciseCopy: {
+     flex: 1,
++    gap: 2,
+   },
+-  repsCell: {
+-    flex: 1,
+-  },
+-  checkButton: {
+-    width: 38,
+-    height: 34,
+-    borderRadius: 8,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#000',
+-  },
+-  checkButtonDone: {
+-    backgroundColor: '#16a34a',
+-    borderColor: '#16a34a',
+-  },
+-  checkText: {
+-    color: '#fff',
+-    fontSize: 15,
+-    fontWeight: '800',
+-    lineHeight: 16,
+-  },
+-  checkTextDone: {
+-    color: '#dcfce7',
+-    fontSize: 15,
+-    fontWeight: '800',
+-    lineHeight: 16,
+-  },
+-  emptyState: {
+-    marginTop: 20,
+-    borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-    borderRadius: 12,
+-    padding: 14,
+-    backgroundColor: '#050505',
+-  },
+-  emptyTitle: {
+-    color: '#fff',
+-    fontSize: 14,
++  exerciseTitle: {
++    color: colors.text,
++    fontSize: typography.body,
+     fontWeight: '700',
+   },
+-  emptySubtitle: {
+-    marginTop: 4,
+-    color: '#999',
+-    fontSize: 12,
+-  },
+-  modalOverlay: {
+-    flex: 1,
+-    justifyContent: 'flex-end',
+-    backgroundColor: 'rgba(0,0,0,0.55)',
+-  },
+-  modalBackdrop: {
+-    ...StyleSheet.absoluteFillObject,
++  exerciseMeta: {
++    color: colors.mutedText,
++    fontSize: typography.caption,
+   },
+-  librarySheet: {
+-    maxHeight: '86%',
+-    borderTopLeftRadius: 16,
+-    borderTopRightRadius: 16,
++  targetPill: {
++    borderRadius: radius.pill,
+     borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-    backgroundColor: '#000',
++    borderColor: colors.border,
++    backgroundColor: colors.backgroundElevated,
+     paddingHorizontal: 12,
+-    paddingTop: 10,
+-    paddingBottom: 20,
+-  },
+-  sheetHandle: {
+-    alignSelf: 'center',
+-    width: 48,
+-    height: 4,
+-    borderRadius: 2,
+-    backgroundColor: '#3f3f3f',
+-    marginBottom: 8,
++    paddingVertical: 8,
+   },
+-  libraryTitle: {
+-    color: '#fff',
+-    fontSize: 18,
++  targetText: {
++    color: colors.text,
++    fontSize: typography.caption,
+     fontWeight: '700',
+-    marginBottom: 10,
+-  },
+-  librarySearch: {
+-    height: 42,
+-    borderRadius: 10,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    color: '#fff',
+-    backgroundColor: '#0a0a0a',
+-    paddingHorizontal: 10,
+-    marginBottom: 8,
+   },
+-  filterRow: {
+-    gap: 8,
+-    paddingBottom: 8,
++  exerciseCoachLine: {
++    color: colors.text,
++    fontSize: typography.caption,
++    lineHeight: 18,
+   },
+-  filterChip: {
+-    height: 30,
+-    borderRadius: 999,
+-    borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    backgroundColor: '#050505',
+-    paddingHorizontal: 10,
++  setRow: {
++    flexDirection: 'row',
+     alignItems: 'center',
+-    justifyContent: 'center',
+-  },
+-  filterChipActive: {
+-    borderColor: '#fff',
+-    backgroundColor: '#fff',
+-  },
+-  filterChipText: {
+-    color: '#d0d0d0',
+-    fontSize: 11,
++    justifyContent: 'space-between',
++    borderRadius: radius.md,
++    borderWidth: 1,
++    borderColor: colors.border,
++    backgroundColor: colors.backgroundElevated,
++    paddingHorizontal: spacing.sm,
++    paddingVertical: 10,
++  },
++  setIndex: {
++    color: colors.text,
++    fontSize: typography.caption,
+     fontWeight: '700',
+   },
+-  filterChipTextActive: {
+-    color: '#000',
+-  },
+-  libraryList: {
+-    marginTop: 4,
+-    marginBottom: 10,
++  setValue: {
++    color: colors.mutedText,
++    fontSize: typography.caption,
++    fontWeight: '600',
+   },
+-  libraryRow: {
+-    minHeight: 52,
+-    borderRadius: 10,
+-    borderWidth: 1,
+-    borderColor: '#1f1f1f',
+-    backgroundColor: '#0a0a0a',
+-    paddingHorizontal: 10,
+-    marginBottom: 8,
++  quickLogRow: {
+     flexDirection: 'row',
+-    alignItems: 'center',
+-    justifyContent: 'space-between',
+-    opacity: 1,
+-  },
+-  libraryRowSelected: {
+-    opacity: 0.55,
+-    borderColor: '#fff',
++    gap: spacing.sm,
+   },
+-  libraryRowContent: {
++  quickInput: {
+     flex: 1,
++  },
++  footerActions: {
+     flexDirection: 'row',
+-    alignItems: 'center',
+-    gap: 8,
++    gap: spacing.sm,
+   },
+-  libraryDetailIcon: {
+-    color: colors.mutedText,
+-    fontSize: 14,
+-    marginRight: spacing.xs,
++  footerButton: {
++    flex: 1,
+   },
+-  libraryMain: {
++  modalOverlay: {
+     flex: 1,
++    justifyContent: 'flex-end',
++    backgroundColor: '#000000A6',
+   },
+-  libraryThumb: {
+-    width: 46,
+-    height: 46,
+-    borderRadius: 8,
+-    marginRight: 10,
++  modalSheet: {
++    maxHeight: '82%',
++    borderTopLeftRadius: 22,
++    borderTopRightRadius: 22,
+     borderWidth: 1,
+-    borderColor: '#2a2a2a',
+-    backgroundColor: '#111',
+-  },
+-  libraryName: {
+-    color: '#fff',
+-    fontSize: 14,
++    borderColor: colors.border,
++    borderBottomWidth: 0,
++    backgroundColor: colors.surface,
++    paddingHorizontal: spacing.md,
++    paddingTop: spacing.md,
++    paddingBottom: spacing.lg,
++    gap: spacing.sm,
++  },
++  modalTitle: {
++    color: colors.text,
++    fontSize: typography.subtitle,
+     fontWeight: '700',
+   },
+-  libraryMeta: {
+-    color: '#a6a6a6',
+-    fontSize: 11,
+-    marginTop: 2,
+-  },
+-  checkmarkCircle: {
+-    width: 26,
+-    height: 26,
+-    borderRadius: 13,
+-    borderWidth: 1,
+-    borderColor: '#5a5a5a',
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#000',
+-  },
+-  checkmarkCircleActive: {
+-    borderColor: '#fff',
+-    backgroundColor: '#fff',
++  modalMeta: {
++    color: colors.mutedText,
++    fontSize: typography.caption,
++    lineHeight: 18,
+   },
+-  checkmarkText: {
+-    color: '#fff',
+-    fontSize: 14,
+-    fontWeight: '700',
+-    lineHeight: 14,
++  libraryList: {
++    maxHeight: 320,
+   },
+-  checkmarkTextActive: {
+-    color: '#000',
++  libraryCard: {
++    padding: spacing.sm,
+   },
+-  libraryStatus: {
+-    color: '#9a9a9a',
+-    fontSize: 12,
+-    marginTop: 6,
+-    marginBottom: 8,
++  libraryCardSelected: {
++    borderColor: colors.primary,
+   },
+-  libraryFooter: {
++  libraryRow: {
+     flexDirection: 'row',
+-    gap: 8,
+-  },
+-  footerButtonSecondary: {
+-    flex: 1,
+-    height: 44,
+-    borderRadius: 10,
+-    borderWidth: 1,
+-    borderColor: '#4b4b4b',
+     alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#000',
+-  },
+-  footerButtonSecondaryText: {
+-    color: '#fff',
+-    fontSize: 13,
+-    fontWeight: '700',
+-  },
+-  footerButtonPrimary: {
+-    flex: 1,
+-    height: 44,
+-    borderRadius: 10,
+-    alignItems: 'center',
+-    justifyContent: 'center',
+-    backgroundColor: '#fff',
+-  },
+-  footerButtonPrimaryText: {
+-    color: '#000',
+-    fontSize: 13,
+-    fontWeight: '700',
++    gap: spacing.sm,
+   },
+ });
+

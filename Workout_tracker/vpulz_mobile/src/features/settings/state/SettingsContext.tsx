@@ -132,6 +132,8 @@ export function SettingsProvider({ children }: PropsWithChildren) {
 
   const colors = useMemo(() => getAppColors(settings.app.themeMode), [settings.app.themeMode]);
 
+  const PALETTE = ['#FF6B6B', '#FFB86B', '#FFD86B', '#7AB3FF', '#7AE1AB', '#D9A7FF'];
+
   const value = useMemo<SettingsContextValue>(
     () => ({
       settings,
@@ -222,6 +224,11 @@ export function SettingsProvider({ children }: PropsWithChildren) {
             customRoutines
           );
 
+          const existingColors = current.calendar.routineColors ?? {};
+          const used = Object.values(existingColors || []);
+          const available = PALETTE.find((c) => !used.includes(c)) ?? PALETTE[customRoutines.length % PALETTE.length];
+          const nextRoutineColors = { ...(current.calendar.routineColors ?? {}), [cleanedName]: available };
+
           return {
             ...current,
             calendar: {
@@ -229,6 +236,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
               customRoutines,
               entries: generated.entries,
               planOverrides: generated.planOverrides,
+              routineColors: nextRoutineColors,
             },
           };
         });
@@ -246,6 +254,12 @@ export function SettingsProvider({ children }: PropsWithChildren) {
             nextCustomRoutines
           );
 
+          const nextRoutineColors = { ...(current.calendar.routineColors ?? {}) };
+          const matchedKey = Object.keys(nextRoutineColors).find((k) => k.toLowerCase() === name.toLowerCase());
+          if (matchedKey) {
+            delete nextRoutineColors[matchedKey];
+          }
+
           return {
             ...current,
             calendar: {
@@ -253,6 +267,7 @@ export function SettingsProvider({ children }: PropsWithChildren) {
               customRoutines: nextCustomRoutines,
               entries: generated.entries,
               planOverrides: generated.planOverrides,
+              routineColors: nextRoutineColors,
             },
           };
         });

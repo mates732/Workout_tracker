@@ -1,39 +1,54 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
-import type { ExerciseItem, LoggedSet, WorkoutExerciseState } from '../../shared/api/workoutApi';
-import type { RootStackParamList } from '../../app/navigation/RootNavigator';
+import type { RootStackParamList } from '../../navigation/RootNavigator';
+import { AppButton, AppCard, AppInput, StickyActionBar } from '../../shared/components/ui';
 import { useDeviceReader } from '../../shared/device/useDeviceReader';
-import { colors, radius, spacing } from '../../shared/theme/tokens';
+import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
+import type { SetType, WorkoutExerciseState } from '../../shared/api/workoutApi';
+import { colors, spacing, typography } from '../../shared/theme/tokens';
+import ExerciseCard from './components/ExerciseCard';
 
 type WorkoutNavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-type SetType = 'N' | 'W' | 'D' | 'F';
 
 type DraftSet = {
   weight: string;
   reps: string;
 };
 
-const TYPE_CYCLE: SetType[] = ['N', 'W', 'D', 'F'];
+type ExerciseLibraryItem = {
+  id?: number;
+  name: string;
+};
+
+const FALLBACK_EXERCISES: ExerciseLibraryItem[] = [
+  { id: -1, name: 'Bench Press' },
+  { id: -2, name: 'Incline DB Press' },
+  { id: -3, name: 'Squat' },
+  { id: -4, name: 'Deadlift' },
+  { id: -5, name: 'Pull Up' },
+];
+
+const SET_TYPE_OPTIONS: Array<{ value: SetType; label: string }> = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'warmup', label: 'W (Warm-up)' },
+  { value: 'pr', label: 'P (PR attempt)' },
+  { value: 'drop', label: 'D (Drop set)' },
+  { value: 'failure', label: 'F (Failure)' },
+];
+
+function formatDuration(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
 
 function parsePositiveFloat(value: string): number {
   const parsed = Number.parseFloat(value.trim().replace(',', '.'));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function parsePositiveInt(value: string): number {
@@ -41,534 +56,588 @@ function parsePositiveInt(value: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function nextType(type: SetType): SetType {
-  const index = TYPE_CYCLE.indexOf(type);
-  return TYPE_CYCLE[(index + 1) % TYPE_CYCLE.length];
-}
-
-type LoggedSetRowProps = {
-  index: number;
-  item: LoggedSet;
-};
-
-const LoggedSetRow = memo(function LoggedSetRow({ index, item }: LoggedSetRowProps) {
-  return (
-    <View style={[styles.row, item.completed ? styles.rowCompleted : styles.rowDefault]}>
-      <View style={styles.setTypePill}>
-        <Text style={styles.setTypeText}>{index + 1}</Text>
-      </View>
-      <Text style={[styles.valueText, styles.weightCell]}>{item.weight}</Text>
-      <Text style={[styles.valueText, styles.repsCell]}>{item.reps}</Text>
-      <View style={styles.checkButtonDone}>
-        <Text style={styles.checkTextDone}>✓</Text>
-      </View>
-    </View>
-  );
-});
-
-type QuickSetRowProps = {
-  exercise: WorkoutExerciseState;
-  setType: SetType;
-  draft: DraftSet;
-  locked: boolean;
-  onSetTypePress: () => void;
-  onWeightChange: (value: string) => void;
-  onRepsChange: (value: string) => void;
-  onCheck: () => void;
-};
-
-const QuickSetRow = memo(function QuickSetRow({
-  exercise,
-  setType,
-  draft,
-  locked,
-  onSetTypePress,
-  onWeightChange,
-  onRepsChange,
-  onCheck,
-}: QuickSetRowProps) {
-  const setNumber = exercise.sets.length + 1;
-
-  return (
-    <View style={[styles.row, locked ? styles.rowCompleted : styles.rowDefault]}>
-      <Pressable style={styles.setTypePill} onPress={onSetTypePress} disabled={locked}>
-        <Text style={styles.setTypeText}>{setNumber}{setType}</Text>
-      </Pressable>
-
-      <TextInput
-        value={draft.weight}
-        onChangeText={onWeightChange}
-        editable={!locked}
-        keyboardType="decimal-pad"
-        style={[styles.input, styles.weightCell, locked && styles.inputLocked]}
-        placeholder="0"
-        placeholderTextColor="#666"
-        returnKeyType="next"
-      />
-
-      <TextInput
-        value={draft.reps}
-        onChangeText={onRepsChange}
-        editable={!locked}
-        keyboardType="number-pad"
-        style={[styles.input, styles.repsCell, locked && styles.inputLocked]}
-        placeholder="0"
-        placeholderTextColor="#666"
-        returnKeyType="done"
-      />
-
-      <Pressable style={[styles.checkButton, locked && styles.checkButtonDone]} onPress={onCheck} disabled={locked}>
-        <Text style={[styles.checkText, locked && styles.checkTextDone]}>✓</Text>
-      </Pressable>
-    </View>
-  );
-});
-
 export function WorkoutScreen() {
   const navigation = useNavigation<WorkoutNavigationProp>();
+  const insets = useSafeAreaInsets();
+  const { horizontalGutter } = useDeviceReader();
   const {
-    activeWorkout,
-    workoutState,
-    busy,
+    currentWorkout,
+    elapsedSeconds,
     error,
     clearError,
-    isWorkoutMinimized,
-    minimizeWorkout,
-    restoreWorkout,
-    startOrResumeWorkout,
-    finishActiveWorkout,
+    startEmptyWorkout,
+    completeActiveWorkoutLocal,
     addExerciseToActiveWorkout,
     logSetForActiveWorkout,
+    patchSetLog,
     searchExerciseLibrary,
+    minimizeWorkout,
+    workoutHistory,
   } = useWorkoutFlow();
-  const { safeAreaPadding, horizontalGutter } = useDeviceReader();
 
-  const [typesByExercise, setTypesByExercise] = useState<Record<string, SetType>>({});
   const [draftsByExercise, setDraftsByExercise] = useState<Record<string, DraftSet>>({});
-  const [lockedByExercise, setLockedByExercise] = useState<Record<string, boolean>>({});
+  const [rowCountByExercise, setRowCountByExercise] = useState<Record<string, number>>({});
+  const [setTypesByExercise, setSetTypesByExercise] = useState<Record<string, Record<number, SetType>>>({});
+
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [libraryItems, setLibraryItems] = useState<ExerciseItem[]>([]);
-  const [libraryQuery, setLibraryQuery] = useState('');
-  const [muscleFilter, setMuscleFilter] = useState('all');
-  const [equipmentFilter, setEquipmentFilter] = useState('all');
-  const [selectedById, setSelectedById] = useState<Record<number, boolean>>({});
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [exerciseQuery, setExerciseQuery] = useState('');
+  const [libraryResults, setLibraryResults] = useState<ExerciseLibraryItem[]>([]);
+  const [remoteFailed, setRemoteFailed] = useState(false);
 
-  const exercises = useMemo(
-    () => [...(workoutState?.exercises ?? [])].sort((a, b) => a.ordering - b.ordering),
-    [workoutState?.exercises]
+  const [selectedExerciseName, setSelectedExerciseName] = useState<string | null>(null);
+  const [setTypePicker, setSetTypePicker] = useState<{ exerciseId: string; rowIndex: number } | null>(null);
+
+  const [restDurationSec, setRestDurationSec] = useState(60);
+  const [restRemainingSec, setRestRemainingSec] = useState(60);
+  const [restRunning, setRestRunning] = useState(false);
+  const [restPickerOpen, setRestPickerOpen] = useState(false);
+  const [customRestInput, setCustomRestInput] = useState('75');
+
+  const exercises = useMemo(() => {
+    const list = currentWorkout?.state?.exercises ?? [];
+    return [...list].sort((a, b) => a.ordering - b.ordering);
+  }, [currentWorkout?.state?.exercises]);
+
+  const getPlannedSets = useCallback(
+    (exercise: WorkoutExerciseState): number => {
+      const plannedExercise =
+        currentWorkout?.plan?.exercises?.find((item) => item.name.toLowerCase() === exercise.name.toLowerCase()) ?? null;
+      return Math.max(plannedExercise?.targetSets ?? 0, exercise.sets.length, 1);
+    },
+    [currentWorkout?.plan?.exercises]
   );
 
-  const selectedCount = useMemo(
-    () => Object.values(selectedById).filter(Boolean).length,
-    [selectedById]
+  const totalRows = useMemo(
+    () => exercises.reduce((sum, exercise) => sum + (rowCountByExercise[exercise.id] ?? getPlannedSets(exercise)), 0),
+    [exercises, getPlannedSets, rowCountByExercise]
   );
 
-  const muscleOptions = useMemo(() => {
-    const options = new Set<string>(['all']);
-    libraryItems.forEach((item) => {
-      const value = item.muscle_group?.trim().toLowerCase();
-      if (value) {
-        options.add(value);
+  const completedSets = useMemo(
+    () => exercises.reduce((sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length, 0),
+    [exercises]
+  );
+
+  const progress = Math.min(1, completedSets / Math.max(1, totalRows));
+
+  const startRestTimer = useCallback((seconds: number) => {
+    setRestDurationSec(seconds);
+    setRestRemainingSec(seconds);
+    setRestRunning(true);
+  }, []);
+
+  useEffect(() => {
+    if (!restRunning) {
+      return;
+    }
+
+    if (restRemainingSec <= 0) {
+      setRestRunning(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setRestRemainingSec((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [restRemainingSec, restRunning]);
+
+  useEffect(() => {
+    if (currentWorkout) {
+      return;
+    }
+    startEmptyWorkout();
+  }, [currentWorkout, startEmptyWorkout]);
+
+  useEffect(() => {
+    setDraftsByExercise((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      exercises.forEach((exercise) => {
+        if (next[exercise.id]) {
+          return;
+        }
+
+        const lastSet = exercise.sets[exercise.sets.length - 1];
+        next[exercise.id] = {
+          weight: String(lastSet?.weight ?? 20),
+          reps: String(lastSet?.reps ?? 8),
+        };
+        changed = true;
+      });
+
+      return changed ? next : current;
+    });
+
+    setRowCountByExercise((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      exercises.forEach((exercise) => {
+        const baseline = getPlannedSets(exercise);
+        if (!next[exercise.id] || next[exercise.id] < baseline) {
+          next[exercise.id] = baseline;
+          changed = true;
+        }
+      });
+
+      Object.keys(next).forEach((exerciseId) => {
+        if (!exercises.some((exercise) => exercise.id === exerciseId)) {
+          delete next[exerciseId];
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
+
+    setSetTypesByExercise((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      exercises.forEach((exercise) => {
+        const existing = next[exercise.id] ?? {};
+        const nextForExercise = { ...existing };
+        let exerciseChanged = false;
+
+        exercise.sets.forEach((setItem, rowIndex) => {
+          if (!nextForExercise[rowIndex] && setItem.set_type) {
+            nextForExercise[rowIndex] = setItem.set_type;
+            exerciseChanged = true;
+          }
+        });
+
+        if (exerciseChanged || !next[exercise.id]) {
+          next[exercise.id] = nextForExercise;
+          changed = true;
+        }
+      });
+
+      return changed ? next : current;
+    });
+  }, [exercises, getPlannedSets]);
+
+  const setDraftValue = useCallback((exerciseId: string, field: keyof DraftSet, value: string) => {
+    const sanitized = field === 'weight' ? value.replace(/[^0-9.,]/g, '') : value.replace(/[^0-9]/g, '');
+    setDraftsByExercise((current) => ({
+      ...current,
+      [exerciseId]: {
+        weight: field === 'weight' ? sanitized : current[exerciseId]?.weight ?? '20',
+        reps: field === 'reps' ? sanitized : current[exerciseId]?.reps ?? '8',
+      },
+    }));
+  }, []);
+
+  const getSetType = useCallback(
+    (exercise: WorkoutExerciseState, rowIndex: number): SetType => {
+      return setTypesByExercise[exercise.id]?.[rowIndex] ?? exercise.sets[rowIndex]?.set_type ?? 'normal';
+    },
+    [setTypesByExercise]
+  );
+
+  const addSetRow = useCallback((exercise: WorkoutExerciseState) => {
+    setRowCountByExercise((current) => ({
+      ...current,
+      [exercise.id]: Math.max(current[exercise.id] ?? 1, exercise.sets.length, 1) + 1,
+    }));
+
+    const lastSet = exercise.sets[exercise.sets.length - 1];
+    if (lastSet) {
+      setDraftsByExercise((current) => ({
+        ...current,
+        [exercise.id]: {
+          weight: String(lastSet.weight),
+          reps: String(lastSet.reps),
+        },
+      }));
+    }
+  }, []);
+
+  const toggleOrAddSet = useCallback(
+    async (exercise: WorkoutExerciseState, rowIndex: number) => {
+      const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
+      const weight = parsePositiveFloat(draft.weight);
+      const reps = parsePositiveInt(draft.reps);
+      if (reps <= 0) {
+        return;
       }
-    });
-    return Array.from(options).slice(0, 12);
-  }, [libraryItems]);
 
-  const equipmentOptions = useMemo(() => {
-    const options = new Set<string>(['all']);
-    libraryItems.forEach((item) => {
-      const value = item.equipment?.trim().toLowerCase();
-      if (value) {
-        options.add(value);
+      const existing = exercise.sets[rowIndex];
+      if (existing) {
+        const willComplete = !existing.completed;
+        const result = await patchSetLog(existing.id, {
+          weight,
+          reps,
+          completed: willComplete,
+        });
+
+        if (willComplete) {
+          startRestTimer(restDurationSec);
+          setDraftsByExercise((current) => ({
+            ...current,
+            [exercise.id]: {
+              weight: String(result.suggestion.next_weight_kg),
+              reps: String(result.suggestion.next_reps),
+            },
+          }));
+        }
+
+        return;
       }
-    });
-    return Array.from(options).slice(0, 12);
-  }, [libraryItems]);
 
-  const filteredLibraryItems = useMemo(() => {
-    const normalizedQuery = libraryQuery.trim().toLowerCase();
-    return libraryItems.filter((item) => {
-      const matchesQuery =
-        !normalizedQuery ||
-        item.name.toLowerCase().includes(normalizedQuery) ||
-        item.muscle_group.toLowerCase().includes(normalizedQuery) ||
-        item.equipment.toLowerCase().includes(normalizedQuery);
-      const matchesMuscle = muscleFilter === 'all' || item.muscle_group.toLowerCase().includes(muscleFilter);
-      const matchesEquipment =
-        equipmentFilter === 'all' || item.equipment.toLowerCase().includes(equipmentFilter);
+      const setType = getSetType(exercise, rowIndex);
+      const result = await logSetForActiveWorkout({
+        workout_exercise_id: exercise.id,
+        weight,
+        reps,
+        rpe: 8,
+        duration: 60,
+        completed: true,
+        set_type: setType,
+      });
 
-      return matchesQuery && matchesMuscle && matchesEquipment;
-    });
-  }, [equipmentFilter, libraryItems, libraryQuery, muscleFilter]);
+      startRestTimer(restDurationSec);
+      setDraftsByExercise((current) => ({
+        ...current,
+        [exercise.id]: {
+          weight: String(result.suggestion.next_weight_kg),
+          reps: String(result.suggestion.next_reps),
+        },
+      }));
+
+      setRowCountByExercise((current) => ({
+        ...current,
+        [exercise.id]: Math.max(current[exercise.id] ?? 1, exercise.sets.length + 1),
+      }));
+    },
+    [draftsByExercise, getSetType, logSetForActiveWorkout, patchSetLog, restDurationSec, startRestTimer]
+  );
+
+  const openExerciseLibrary = useCallback(() => {
+    setLibraryOpen(true);
+  }, []);
 
   useEffect(() => {
     if (!libraryOpen) {
       return;
     }
 
-    if (searchDebounceRef.current) {
-      clearTimeout(searchDebounceRef.current);
-    }
-
-    searchDebounceRef.current = setTimeout(() => {
-      setLibraryLoading(true);
-      void searchExerciseLibrary(libraryQuery || undefined, muscleFilter === 'all' ? undefined : muscleFilter)
-        .then((rows) => {
-          setLibraryItems(rows);
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      void searchExerciseLibrary(exerciseQuery, undefined)
+        .then((results) => {
+          if (cancelled) {
+            return;
+          }
+          setLibraryResults(
+            results.map((item) => ({
+              id: item.id,
+              name: item.name,
+            }))
+          );
+          setRemoteFailed(false);
         })
         .catch(() => {
-          setLibraryItems([]);
-        })
-        .finally(() => {
-          setLibraryLoading(false);
+          if (cancelled) {
+            return;
+          }
+          setLibraryResults([]);
+          setRemoteFailed(true);
         });
-    }, 160);
+    }, 250);
 
     return () => {
-      if (searchDebounceRef.current) {
-        clearTimeout(searchDebounceRef.current);
-      }
+      cancelled = true;
+      clearTimeout(handle);
     };
-  }, [libraryOpen, libraryQuery, muscleFilter, searchExerciseLibrary]);
+  }, [exerciseQuery, libraryOpen, searchExerciseLibrary]);
 
-  const startWorkout = useCallback(async () => {
-    try {
-      await startOrResumeWorkout();
-    } catch {
-      // Handled by context error state.
-    }
-  }, [startOrResumeWorkout]);
-
-  const openLibrary = useCallback(async () => {
-    try {
-      if (!activeWorkout) {
-        await startOrResumeWorkout();
-      }
-      setLibraryOpen(true);
-    } catch {
-      // Handled by context error state.
-    }
-  }, [activeWorkout, startOrResumeWorkout]);
-
-  const toggleLibrarySelection = useCallback((id: number) => {
-    setSelectedById((current) => ({
-      ...current,
-      [id]: !current[id],
-    }));
-  }, []);
-
-  const addSelectedExercises = useCallback(async () => {
-    const selected = filteredLibraryItems.filter((item) => selectedById[item.id]);
-    if (!selected.length) {
-      return;
-    }
-
-    const existingIds = new Set(exercises.map((item) => item.exercise_id));
-    const deduped = selected.filter((item) => !existingIds.has(item.id));
-
-    for (const item of deduped) {
-      await addExerciseToActiveWorkout({ exercise_id: item.id });
-    }
-
-    setSelectedById({});
-    setLibraryOpen(false);
-  }, [addExerciseToActiveWorkout, exercises, filteredLibraryItems, selectedById]);
-
-  const finishWorkout = useCallback(async () => {
-    if (!activeWorkout) {
-      return;
-    }
-
-    try {
-      await finishActiveWorkout();
-      navigation.navigate('WorkoutSummary', {
-        durationMinutes: 0,
-        totalVolume: 0,
-        totalSets: 0,
-        personalRecord: null,
-        insight: null,
-      });
-    } catch {
-      // Handled by context error state.
-    }
-  }, [activeWorkout, finishActiveWorkout, navigation]);
-
-  const viewExerciseDetails = useCallback(
-    (exercise: WorkoutExerciseState) => {
-      // Convert WorkoutExerciseState to ExerciseItem format
-      const exerciseItem: ExerciseItem = {
-        id: exercise.exercise_id,
-        name: exercise.name,
-        muscle_group: exercise.muscle_group,
-        equipment: exercise.equipment,
-        instructions: '',
-        source: 'backend',
-      };
-      navigation.navigate('ExerciseDetail', { exercise: exerciseItem });
+  const addExerciseAndClose = useCallback(
+    (exercise: ExerciseLibraryItem) => {
+      setLibraryOpen(false);
+      setExerciseQuery('');
+      setLibraryResults([]);
+      setRemoteFailed(false);
+      void addExerciseToActiveWorkout({ exercise_id: exercise.id, exercise_name: exercise.name }).catch(() => undefined);
     },
-    [navigation]
+    [addExerciseToActiveWorkout]
   );
+
+  const finishWorkout = useCallback(() => {
+    const active = currentWorkout;
+    if (!active) {
+      return;
+    }
+
+    const completed = active.state.exercises.reduce(
+      (sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length,
+      0
+    );
+    const total = active.state.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
+
+    completeActiveWorkoutLocal({
+      date: new Date().toISOString(),
+      exercises: active.state.exercises,
+      performance: total > 0 ? completed / total : 0,
+    });
+
+    (navigation as any).navigate('MainTabs', { screen: 'Home' });
+  }, [completeActiveWorkoutLocal, currentWorkout, navigation]);
 
   const onMinimize = useCallback(() => {
     minimizeWorkout();
-    navigation.navigate('MainTabs');
+    (navigation as any).navigate('MainTabs', { screen: 'Training' });
   }, [minimizeWorkout, navigation]);
 
-  const toggleType = useCallback((exerciseId: string) => {
-    setTypesByExercise((current) => {
-      const currentType = current[exerciseId] ?? 'N';
-      return {
-        ...current,
-        [exerciseId]: nextType(currentType),
-      };
-    });
-  }, []);
+  const applySetType = useCallback((type: SetType) => {
+    if (!setTypePicker) {
+      return;
+    }
 
-  const setDraftWeight = useCallback((exerciseId: string, value: string) => {
-    const numeric = value.replace(/[^0-9.,]/g, '');
-    setDraftsByExercise((current) => ({
+    setSetTypesByExercise((current) => ({
       ...current,
-      [exerciseId]: {
-        weight: numeric,
-        reps: current[exerciseId]?.reps ?? '8',
+      [setTypePicker.exerciseId]: {
+        ...(current[setTypePicker.exerciseId] ?? {}),
+        [setTypePicker.rowIndex]: type,
       },
     }));
-  }, []);
+    setSetTypePicker(null);
+  }, [setTypePicker]);
 
-  const setDraftReps = useCallback((exerciseId: string, value: string) => {
-    const numeric = value.replace(/[^0-9]/g, '');
-    setDraftsByExercise((current) => ({
-      ...current,
-      [exerciseId]: {
-        weight: current[exerciseId]?.weight ?? '20',
-        reps: numeric,
-      },
-    }));
-  }, []);
-
-  const checkSet = useCallback(
-    async (exercise: WorkoutExerciseState) => {
-      const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
-      const weight = parsePositiveFloat(draft.weight);
-      const reps = parsePositiveInt(draft.reps);
-      if (!weight || !reps) {
-        return;
-      }
-
-      setLockedByExercise((current) => ({ ...current, [exercise.id]: true }));
-      try {
-        await logSetForActiveWorkout({
-          workout_exercise_id: exercise.id,
-          weight,
-          reps,
-          rpe: 8,
-          duration: 60,
-          completed: true,
-        });
-
-        setDraftsByExercise((current) => ({
-          ...current,
-          [exercise.id]: { weight: String(weight), reps: String(reps) },
-        }));
-      } catch {
-        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
-        return;
-      }
-
-      setTimeout(() => {
-        setLockedByExercise((current) => ({ ...current, [exercise.id]: false }));
-      }, 180);
+  const applyRestPreset = useCallback(
+    (seconds: number) => {
+      setRestPickerOpen(false);
+      startRestTimer(seconds);
+      setCustomRestInput(String(seconds));
     },
-    [draftsByExercise, logSetForActiveWorkout]
+    [startRestTimer]
   );
 
+  const applyCustomRest = useCallback(() => {
+    const parsed = Number.parseInt(customRestInput.trim(), 10);
+    const next = Number.isFinite(parsed) && parsed > 0 ? parsed : restDurationSec;
+    applyRestPreset(next);
+  }, [applyRestPreset, customRestInput, restDurationSec]);
+
+  const selectedExercise = selectedExerciseName
+    ? exercises.find((exercise) => exercise.name === selectedExerciseName) ?? null
+    : null;
+
+  const selectedHistory = selectedExercise
+    ? workoutHistory
+        .slice()
+        .reverse()
+        .find((entry) => entry.exercises.some((exercise) => exercise.name === selectedExercise.name)) ?? null
+    : null;
+
+  const selectedHistoryExercise =
+    selectedExercise && selectedHistory
+      ? selectedHistory.exercises.find((exercise) => exercise.name === selectedExercise.name) ?? null
+      : null;
+
   return (
-    <SafeAreaView
-      style={[styles.safeArea, { paddingTop: safeAreaPadding.paddingTop, paddingBottom: safeAreaPadding.paddingBottom }]}
-      edges={['top', 'left', 'right', 'bottom']}
-    >
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
       <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
         <View style={styles.header}>
-          <Pressable style={styles.minimizeButton} onPress={onMinimize} disabled={!activeWorkout}>
-            <Text style={[styles.minimizeButtonText, !activeWorkout && styles.minimizeButtonTextDisabled]}>∨</Text>
-          </Pressable>
-          <View>
-            <Text style={styles.title}>Workout</Text>
-            <Text style={styles.subtitle}>{activeWorkout ? 'Session active' : 'Ready'}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>{currentWorkout?.plan.title ?? 'New Workout'}</Text>
+            <Text style={styles.metaText}>{`${completedSets}/${Math.max(1, totalRows)} sets complete`}</Text>
           </View>
-          <View style={styles.actions}>
-            {!activeWorkout ? (
-              <Pressable style={styles.startButton} onPress={() => void startWorkout()} disabled={busy}>
-                {busy ? (
-                  <ActivityIndicator size="small" color="#000" />
-                ) : (
-                  <Text style={styles.startButtonText}>Start Workout</Text>
-                )}
-              </Pressable>
-            ) : (
-              <View style={styles.activeActions}>
-                <Pressable style={styles.addButton} onPress={() => void openLibrary()}>
-                  <Text style={styles.addButtonText}>+ Add</Text>
-                </Pressable>
-                <Pressable style={styles.finishButton} onPress={() => void finishWorkout()}>
-                  <Text style={styles.finishButtonText}>Finish</Text>
-                </Pressable>
-              </View>
-            )}
+
+          <View style={styles.headerRight}>
+            <Pressable
+              onPress={() => setRestPickerOpen(true)}
+              style={[styles.timerPill, restRunning ? styles.timerPillRunning : null]}
+            >
+              <Text style={styles.timerPillText}>{`⏱ ${formatDuration(restRunning ? restRemainingSec : restDurationSec)}`}</Text>
+            </Pressable>
+            <Text style={styles.elapsedText}>{formatDuration(elapsedSeconds)}</Text>
           </View>
         </View>
 
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.max(2, Math.round(progress * 100))}%` }]} />
+        </View>
+
         {error ? (
-          <Pressable style={styles.errorBanner} onPress={clearError}>
+          <AppCard style={styles.errorCard}>
             <Text style={styles.errorText}>{error}</Text>
-          </Pressable>
+            <AppButton variant="secondary" onPress={clearError}>
+              Dismiss
+            </AppButton>
+          </AppCard>
         ) : null}
 
-        {isWorkoutMinimized ? (
-          <View style={styles.minimizedPlaceholder}>
-            <Text style={styles.minimizedText}>Workout minimized</Text>
-            <Pressable style={styles.restoreButton} onPress={restoreWorkout}>
-              <Text style={styles.restoreButtonText}>Restore</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {!exercises.length ? (
+            <AppCard style={styles.emptyCard}>
+              <Text style={styles.emptyTitle}>New workout started</Text>
+              <Text style={styles.emptyBody}>Add your first exercise to begin logging sets.</Text>
+              <View style={{ marginTop: spacing.sm }}>
+                <AppButton onPress={openExerciseLibrary}>Add Exercise</AppButton>
+              </View>
+            </AppCard>
+          ) : null}
 
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-          pointerEvents={isWorkoutMinimized ? 'none' : 'auto'}
-          style={isWorkoutMinimized ? styles.hiddenScroll : undefined}
-        >
           {exercises.map((exercise) => {
             const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
-            const type = typesByExercise[exercise.id] ?? 'N';
-            const locked = Boolean(lockedByExercise[exercise.id]);
+            const plannedExercise =
+              currentWorkout?.plan?.exercises?.find((item) => item.name.toLowerCase() === exercise.name.toLowerCase()) ?? null;
+            const rowCount = rowCountByExercise[exercise.id] ?? getPlannedSets(exercise);
 
             return (
-              <Pressable
+              <ExerciseCard
                 key={exercise.id}
-                style={[styles.exerciseCard, styles.exerciseCardPressable]}
-                onPress={() => viewExerciseDetails(exercise)}
-              >
-                <View style={styles.exerciseHeader}>
-                  <Text style={styles.exerciseTitle}>{exercise.name}</Text>
-                  <Text style={styles.exerciseDetailHint}>→</Text>
-                </View>
-
-                {exercise.sets.map((setItem, index) => (
-                  <LoggedSetRow key={setItem.id} index={index} item={setItem} />
-                ))}
-
-                <QuickSetRow
-                  exercise={exercise}
-                  setType={type}
-                  draft={draft}
-                  locked={locked}
-                  onSetTypePress={() => toggleType(exercise.id)}
-                  onWeightChange={(value) => setDraftWeight(exercise.id, value)}
-                  onRepsChange={(value) => setDraftReps(exercise.id, value)}
-                  onCheck={() => void checkSet(exercise)}
-                />
-              </Pressable>
+                exercise={exercise}
+                planExercise={plannedExercise}
+                rowCount={rowCount}
+                draft={draft}
+                getSetType={(rowIndex) => getSetType(exercise, rowIndex)}
+                onOpenExercise={() => setSelectedExerciseName(exercise.name)}
+                onChangeDraft={(field, value) => setDraftValue(exercise.id, field, value)}
+                onPressSetType={(rowIndex) => setSetTypePicker({ exerciseId: exercise.id, rowIndex })}
+                onToggleSet={(rowIndex) => toggleOrAddSet(exercise, rowIndex)}
+                onAddSetRow={() => addSetRow(exercise)}
+                onAddExerciseBelow={openExerciseLibrary}
+              />
             );
           })}
-
-          {activeWorkout && exercises.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyTitle}>No exercises yet</Text>
-              <Text style={styles.emptySubtitle}>Add exercises first, then log sets instantly.</Text>
-            </View>
-          ) : null}
         </ScrollView>
+
+        <StickyActionBar>
+          <View style={styles.footerActions}>
+            <AppButton variant="secondary" style={styles.footerButton} onPress={openExerciseLibrary}>
+              Add Exercise
+            </AppButton>
+            <AppButton variant="secondary" style={styles.footerButton} onPress={onMinimize}>
+              Minimize
+            </AppButton>
+            <AppButton style={styles.finishButton} onPress={finishWorkout}>
+              Finish
+            </AppButton>
+          </View>
+        </StickyActionBar>
       </View>
+
+      <Modal visible={Boolean(selectedExerciseName)} transparent animationType="slide" onRequestClose={() => setSelectedExerciseName(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{selectedExerciseName}</Text>
+              <AppButton variant="secondary" style={styles.smallCloseButton} onPress={() => setSelectedExerciseName(null)}>
+                Close
+              </AppButton>
+            </View>
+
+            <Text style={styles.previewMetaText}>Muscles</Text>
+            <Text style={styles.cardBody}>{selectedExercise?.muscle_group ?? '—'}</Text>
+
+            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>Equipment</Text>
+            <Text style={styles.cardBody}>{selectedExercise?.equipment ?? '—'}</Text>
+
+            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>Instructions</Text>
+            <Text style={styles.cardBody}>
+              {currentWorkout?.plan?.exercises?.find((exercise) => exercise.name === selectedExerciseName)?.coachCue ??
+                'No instruction available.'}
+            </Text>
+
+            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>History</Text>
+            {selectedHistoryExercise && selectedHistory ? (
+              <Text style={styles.cardBody}>{`${selectedHistoryExercise.sets} sets • ${selectedHistoryExercise.topWeight ?? '-'}kg x ${selectedHistoryExercise.topReps ?? '-'} reps on ${new Date(selectedHistory.completedAt).toDateString()}`}</Text>
+            ) : (
+              <Text style={styles.cardBody}>No recent history for this exercise.</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(setTypePicker)} transparent animationType="slide" onRequestClose={() => setSetTypePicker(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Set Type</Text>
+            {SET_TYPE_OPTIONS.map((option) => (
+              <AppButton key={option.value} variant="secondary" style={{ marginTop: spacing.xs }} onPress={() => applySetType(option.value)}>
+                {option.label}
+              </AppButton>
+            ))}
+            <AppButton variant="ghost" style={{ marginTop: spacing.sm }} onPress={() => setSetTypePicker(null)}>
+              Cancel
+            </AppButton>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={restPickerOpen} transparent animationType="slide" onRequestClose={() => setRestPickerOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Rest Timer</Text>
+            <View style={{ gap: spacing.xs }}>
+              <AppButton variant="secondary" onPress={() => applyRestPreset(30)}>
+                30 seconds
+              </AppButton>
+              <AppButton variant="secondary" onPress={() => applyRestPreset(60)}>
+                60 seconds
+              </AppButton>
+              <AppButton variant="secondary" onPress={() => applyRestPreset(90)}>
+                90 seconds
+              </AppButton>
+            </View>
+
+            <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+              <Text style={styles.previewMetaText}>Custom seconds</Text>
+              <AppInput value={customRestInput} onChangeText={setCustomRestInput} keyboardType="number-pad" />
+              <AppButton variant="secondary" onPress={applyCustomRest}>
+                Start Custom
+              </AppButton>
+              <AppButton
+                variant="ghost"
+                onPress={() => {
+                  setRestRunning(false);
+                  setRestPickerOpen(false);
+                }}
+              >
+                Stop Timer
+              </AppButton>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={libraryOpen} animationType="slide" transparent onRequestClose={() => setLibraryOpen(false)}>
         <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={() => setLibraryOpen(false)} />
-          <View style={styles.librarySheet}>
-            <View style={styles.sheetHandle} />
-            <Text style={styles.libraryTitle}>Exercise Library</Text>
-
-            <TextInput
-              value={libraryQuery}
-              onChangeText={setLibraryQuery}
-              placeholder="Search by keyword"
-              placeholderTextColor="#666"
-              style={styles.librarySearch}
+          <View style={styles.modalSheet}>
+            <Text style={styles.modalTitle}>Add Exercise</Text>
+            <AppInput
+              value={exerciseQuery}
+              onChangeText={setExerciseQuery}
+              placeholder="Search exercises"
+              autoCapitalize="none"
+              autoCorrect={false}
             />
-
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-              {muscleOptions.map((option) => (
-                <Pressable
-                  key={`muscle-${option}`}
-                  style={[styles.filterChip, muscleFilter === option && styles.filterChipActive]}
-                  onPress={() => setMuscleFilter(option)}
-                >
-                  <Text style={[styles.filterChipText, muscleFilter === option && styles.filterChipTextActive]}>{option}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-              {equipmentOptions.map((option) => (
-                <Pressable
-                  key={`equip-${option}`}
-                  style={[styles.filterChip, equipmentFilter === option && styles.filterChipActive]}
-                  onPress={() => setEquipmentFilter(option)}
-                >
-                  <Text style={[styles.filterChipText, equipmentFilter === option && styles.filterChipTextActive]}>{option}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
-            {libraryLoading ? <Text style={styles.libraryStatus}>Loading...</Text> : null}
-
+            {remoteFailed ? <Text style={styles.modalMeta}>Could not load from WGER. Showing fallback list.</Text> : null}
             <FlatList
-              data={filteredLibraryItems}
-              keyExtractor={(item) => String(item.id)}
-              style={styles.libraryList}
+              data={libraryResults.length ? libraryResults : FALLBACK_EXERCISES}
+              keyExtractor={(item) => String(item.id ?? item.name)}
               keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => {
-                const selected = Boolean(selectedById[item.id]);
-                return (
-                  <View style={[styles.libraryRow, selected && styles.libraryRowSelected]}>
-                    <Pressable
-                      style={styles.libraryRowContent}
-                      onPress={() => viewExerciseDetails({ ...item, id: String(item.id), workout_id: '', exercise_id: item.id, ordering: 0, sets: [] } as unknown as WorkoutExerciseState)}
-                    >
-                      {item.image_url ? (
-                        <Image source={{ uri: item.image_url }} style={styles.libraryThumb} resizeMode="cover" />
-                      ) : null}
-                      <View style={styles.libraryMain}>
-                        <Text style={styles.libraryName}>{item.name}</Text>
-                        <Text style={styles.libraryMeta}>{item.muscle_group} • {item.equipment}</Text>
-                        {item.video_url ? <Text style={styles.libraryMeta}>Video available</Text> : null}
-                      </View>
-                      <Text style={styles.libraryDetailIcon}>→</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.checkmarkCircle, selected && styles.checkmarkCircleActive]}
-                      onPress={() => toggleLibrarySelection(item.id)}
-                    >
-                      <Text style={[styles.checkmarkText, selected && styles.checkmarkTextActive]}>
-                        {selected ? '✓' : ''}
-                      </Text>
-                    </Pressable>
+              style={styles.libraryList}
+              renderItem={({ item }) => (
+                <AppCard style={styles.libraryCard}>
+                  <View style={styles.libraryRow}>
+                    <View style={styles.exerciseCopy}>
+                      <Text style={styles.exerciseTitle}>{item.name}</Text>
+                    </View>
+                    <AppButton variant="secondary" onPress={() => addExerciseAndClose(item)}>
+                      Add
+                    </AppButton>
                   </View>
-                );
-              }}
-              ListEmptyComponent={!libraryLoading ? <Text style={styles.libraryStatus}>No exercises found.</Text> : null}
+                </AppCard>
+              )}
             />
-
-            <View style={styles.libraryFooter}>
-              <Pressable style={styles.footerButtonSecondary} onPress={() => setLibraryOpen(false)}>
-                <Text style={styles.footerButtonSecondaryText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={styles.footerButtonPrimary} onPress={() => void addSelectedExercises()}>
-                <Text style={styles.footerButtonPrimaryText}>Add Selected ({selectedCount})</Text>
-              </Pressable>
+            <View style={styles.footerActionsPlain}>
+              <AppButton variant="secondary" style={styles.footerButton} onPress={() => setLibraryOpen(false)}>
+                Done
+              </AppButton>
             </View>
           </View>
         </View>
@@ -580,462 +649,178 @@ export function WorkoutScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: colors.background,
   },
   container: {
     flex: 1,
-    backgroundColor: '#000',
-    paddingHorizontal: 14,
-    paddingTop: 8,
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'flex-start',
     alignItems: 'center',
-    marginBottom: 10,
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xs,
   },
-  minimizeButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  minimizeButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-    lineHeight: 18,
-  },
-  minimizeButtonTextDisabled: {
-    color: '#555',
+  headerRight: {
+    alignItems: 'flex-end',
+    gap: spacing.xs,
   },
   title: {
-    color: '#fff',
-    fontSize: 28,
+    color: colors.text,
+    fontSize: typography.title,
     fontWeight: '700',
   },
-  subtitle: {
-    color: '#999',
-    fontSize: 12,
+  metaText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
   },
-  actions: {
-    alignItems: 'flex-end',
-  },
-  activeActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  addButton: {
-    minWidth: 72,
-    height: 42,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
-  },
-  addButtonText: {
-    color: '#fff',
+  elapsedText: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
     fontWeight: '700',
-    fontSize: 13,
   },
-  startButton: {
-    minWidth: 132,
-    height: 42,
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  startButtonText: {
-    color: '#000',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-  finishButton: {
+  timerPill: {
     minWidth: 96,
-    height: 42,
-    borderRadius: 10,
+    minHeight: 38,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#fff',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
   },
-  finishButtonText: {
-    color: '#fff',
+  timerPillRunning: {
+    borderColor: 'rgba(34,197,94,0.7)',
+    backgroundColor: 'rgba(34,197,94,0.15)',
+  },
+  timerPillText: {
+    color: colors.text,
     fontWeight: '700',
-    fontSize: 13,
+    fontSize: typography.caption,
   },
-  errorBanner: {
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#fff',
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 10,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
   },
-  errorText: {
-    color: '#fff',
-    fontSize: 12,
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#22C55E',
   },
   content: {
-    paddingBottom: 120,
-    gap: 10,
+    gap: spacing.sm,
+    paddingBottom: 150,
   },
-  hiddenScroll: {
-    opacity: 0,
-  },
-  minimizedPlaceholder: {
-    borderWidth: 1,
-    borderColor: '#1f1f1f',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    backgroundColor: '#050505',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  minimizedText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  restoreButton: {
-    minWidth: 86,
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  restoreButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  exerciseCard: {
-    borderWidth: 1,
-    borderColor: '#1f1f1f',
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: '#000',
-    gap: 8,
-  },
-  exerciseCardPressable: {
-    opacity: 0.9,
-  },
-  exerciseHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  exerciseTitle: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    flex: 1,
-  },
-  exerciseDetailHint: {
-    color: colors.mutedText,
-    fontSize: 14,
-    marginLeft: spacing.sm,
-  },
-  row: {
-    minHeight: 44,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    gap: 6,
-  },
-  rowDefault: {
-    backgroundColor: '#0b0b0b',
-    borderWidth: 1,
-    borderColor: '#1f1f1f',
-  },
-  rowCompleted: {
-    backgroundColor: '#16a34a',
-    borderWidth: 1,
-    borderColor: '#16a34a',
-  },
-  setTypePill: {
-    width: 56,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
-  },
-  setTypeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  input: {
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    color: '#fff',
-    textAlign: 'center',
-    paddingHorizontal: 4,
-    backgroundColor: '#000',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  inputLocked: {
-    color: '#dcfce7',
-    borderColor: '#15803d',
-    backgroundColor: '#15803d',
-  },
-  valueText: {
-    color: '#fff',
-    textAlign: 'center',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  weightCell: {
-    flex: 1,
-  },
-  repsCell: {
-    flex: 1,
-  },
-  checkButton: {
-    width: 38,
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
-  },
-  checkButtonDone: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
-  },
-  checkText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '800',
-    lineHeight: 16,
-  },
-  checkTextDone: {
-    color: '#dcfce7',
-    fontSize: 15,
-    fontWeight: '800',
-    lineHeight: 16,
-  },
-  emptyState: {
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: '#1f1f1f',
-    borderRadius: 12,
-    padding: 14,
-    backgroundColor: '#050505',
+  emptyCard: {
+    padding: spacing.md,
   },
   emptyTitle: {
-    color: '#fff',
-    fontSize: 14,
+    color: colors.text,
+    fontSize: typography.subtitle,
     fontWeight: '700',
   },
-  emptySubtitle: {
-    marginTop: 4,
-    color: '#999',
-    fontSize: 12,
+  emptyBody: {
+    color: colors.mutedText,
+    fontSize: typography.body,
+    marginTop: spacing.xs,
+  },
+  errorCard: {
+    marginBottom: spacing.sm,
+    borderColor: '#5D2632',
+  },
+  errorText: {
+    color: colors.text,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  footerActions: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  footerActionsPlain: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  footerButton: {
+    flex: 1,
+  },
+  finishButton: {
+    flex: 1.2,
+    minHeight: 48,
   },
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: '#000000A6',
   },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  librarySheet: {
-    maxHeight: '86%',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+  modalSheet: {
+    maxHeight: '82%',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
     borderWidth: 1,
-    borderColor: '#1f1f1f',
-    backgroundColor: '#000',
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 20,
+    borderColor: colors.border,
+    borderBottomWidth: 0,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
   },
-  sheetHandle: {
-    alignSelf: 'center',
-    width: 48,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#3f3f3f',
-    marginBottom: 8,
-  },
-  libraryTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  librarySearch: {
-    height: 42,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    color: '#fff',
-    backgroundColor: '#0a0a0a',
-    paddingHorizontal: 10,
-    marginBottom: 8,
-  },
-  filterRow: {
-    gap: 8,
-    paddingBottom: 8,
-  },
-  filterChip: {
-    height: 30,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    backgroundColor: '#050505',
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterChipActive: {
-    borderColor: '#fff',
-    backgroundColor: '#fff',
-  },
-  filterChipText: {
-    color: '#d0d0d0',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  filterChipTextActive: {
-    color: '#000',
-  },
-  libraryList: {
-    marginTop: 4,
-    marginBottom: 10,
-  },
-  libraryRow: {
-    minHeight: 52,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1f1f1f',
-    backgroundColor: '#0a0a0a',
-    paddingHorizontal: 10,
-    marginBottom: 8,
+  modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    opacity: 1,
+    gap: spacing.sm,
   },
-  libraryRowSelected: {
-    opacity: 0.55,
-    borderColor: '#fff',
+  modalTitle: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '700',
   },
-  libraryRowContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  libraryDetailIcon: {
+  modalMeta: {
     color: colors.mutedText,
-    fontSize: 14,
-    marginRight: spacing.xs,
+    fontSize: typography.caption,
+    lineHeight: 18,
   },
-  libraryMain: {
-    flex: 1,
+  smallCloseButton: {
+    minHeight: 36,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-end',
+    borderRadius: 10,
   },
-  libraryThumb: {
-    width: 46,
-    height: 46,
-    borderRadius: 8,
-    marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#2a2a2a',
-    backgroundColor: '#111',
+  previewMetaText: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
   },
-  libraryName: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
+  cardBody: {
+    color: colors.text,
+    fontSize: typography.body,
+    lineHeight: 20,
   },
-  libraryMeta: {
-    color: '#a6a6a6',
-    fontSize: 11,
-    marginTop: 2,
+  libraryList: {
+    maxHeight: 320,
   },
-  checkmarkCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: '#5a5a5a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
+  libraryCard: {
+    padding: spacing.sm,
   },
-  checkmarkCircleActive: {
-    borderColor: '#fff',
-    backgroundColor: '#fff',
-  },
-  checkmarkText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 14,
-  },
-  checkmarkTextActive: {
-    color: '#000',
-  },
-  libraryStatus: {
-    color: '#9a9a9a',
-    fontSize: 12,
-    marginTop: 6,
-    marginBottom: 8,
-  },
-  libraryFooter: {
+  libraryRow: {
     flexDirection: 'row',
-    gap: 8,
-  },
-  footerButtonSecondary: {
-    flex: 1,
-    height: 44,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#4b4b4b',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000',
+    gap: spacing.sm,
   },
-  footerButtonSecondaryText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  footerButtonPrimary: {
+  exerciseCopy: {
     flex: 1,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fff',
+    gap: 2,
   },
-  footerButtonPrimaryText: {
-    color: '#000',
-    fontSize: 13,
+  exerciseTitle: {
+    color: colors.text,
+    fontSize: typography.body,
     fontWeight: '700',
   },
 });

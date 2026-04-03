@@ -1,10 +1,18 @@
 import { PropsWithChildren } from 'react';
 import { StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing } from '../theme/tokens';
 
 export function Screen({ children }: PropsWithChildren) {
-  return <SafeAreaView style={styles.container}>{children}</SafeAreaView>;
+  const insets = useSafeAreaInsets();
+  return (
+    <SafeAreaView
+      style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+      edges={[]}
+    >
+      {children}
+    </SafeAreaView>
+  );
 }
 
 const styles = StyleSheet.create({

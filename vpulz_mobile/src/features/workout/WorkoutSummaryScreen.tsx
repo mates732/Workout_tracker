@@ -1,17 +1,16 @@
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
-import type { RootStackParamList } from '../../app/navigation/RootNavigator';
-import { PressableScale } from '../../shared/animations/PressableScale';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { RootStackParamList } from '../../navigation/RootNavigator';
+import { AppButton, AppCard } from '../../shared/components/ui';
+import { generateFeedback } from '../../shared/state/settingsLogic';
+import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
 import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
 
 type WorkoutSummaryNavigationProp = NativeStackNavigationProp<RootStackParamList, 'WorkoutSummary'>;
 type WorkoutSummaryRouteProp = RouteProp<RootStackParamList, 'WorkoutSummary'>;
-
-function formatDuration(minutes: number): string {
-  return `${Math.max(1, minutes)}m`;
-}
 
 function formatVolume(volume: number): string {
   return `${Math.round(volume).toLocaleString()} kg`;
@@ -20,43 +19,83 @@ function formatVolume(volume: number): string {
 export function WorkoutSummaryScreen() {
   const navigation = useNavigation<WorkoutSummaryNavigationProp>();
   const route = useRoute<WorkoutSummaryRouteProp>();
+  const { summary, nextPlan } = route.params;
+  const insets = useSafeAreaInsets();
+  const { setCurrentWorkout } = useWorkoutFlow();
+
+  const startNextWorkout = () => {
+    if (!nextPlan) {
+      navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
+      return;
+    }
+
+    setCurrentWorkout(nextPlan);
+    navigation.replace('ActiveWorkout');
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View>
-          <Text style={styles.title}>Session Complete</Text>
-          <Text style={styles.subtitle}>Nice work. Here is your workout summary.</Text>
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={styles.eyebrow}>{nextPlan ? 'Workout Complete' : 'Workout Detail'}</Text>
+          <Text style={styles.title}>{nextPlan ? 'AI feedback is ready' : 'Saved workout summary'}</Text>
+          <Text style={styles.subtitle}>{summary.summaryLine}</Text>
         </View>
 
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Duration</Text>
-            <Text style={styles.statValue}>{formatDuration(route.params.durationMinutes)}</Text>
+            <Text style={styles.statValue}>{summary.durationMinutes}m</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Volume</Text>
-            <Text style={styles.statValue}>{formatVolume(route.params.totalVolume)}</Text>
+            <Text style={styles.statLabel}>Volume</Text>
+            <Text style={styles.statValue}>{formatVolume(summary.totalVolume)}</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Completed Sets</Text>
-            <Text style={styles.statValue}>{route.params.totalSets}</Text>
+            <Text style={styles.statLabel}>PRs</Text>
+            <Text style={styles.statValue}>{summary.prs}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Score</Text>
+            <Text style={styles.statValue}>{summary.performance.toFixed(2)}</Text>
           </View>
         </View>
 
-        <View style={styles.insightsCard}>
-          <Text style={styles.insightsTitle}>Highlights</Text>
-          <Text style={styles.insightsBody}>{route.params.personalRecord ?? 'No PR in this session.'}</Text>
-          <Text style={styles.insightsBody}>{route.params.insight ?? 'Keep your pace steady next time.'}</Text>
-        </View>
+        <AppCard>
+          <Text style={styles.sectionLabel}>Post Workout Feedback</Text>
+          <Text style={styles.feedbackText}>{summary.feedback ?? generateFeedback(summary.performance)}</Text>
+          <Text style={styles.supportText}>Total sets logged: {summary.completedSets}</Text>
+        </AppCard>
 
-        <PressableScale
-          style={styles.doneButton}
-          onPress={() => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] })}
-        >
-          <Text style={styles.doneButtonText}>Back to Workout</Text>
-        </PressableScale>
-      </View>
+        <AppCard>
+          <Text style={styles.sectionLabel}>Next Workout</Text>
+          <Text style={styles.nextTitle}>{nextPlan?.title ?? 'Adaptive plan ready'}</Text>
+          <Text style={styles.nextBody}>{nextPlan?.recommendation ?? generateFeedback(summary.performance)}</Text>
+          <Text style={styles.supportText}>{nextPlan?.summary ?? 'Open Home to start the next workout instantly.'}</Text>
+        </AppCard>
+
+        {nextPlan ? (
+          <View style={styles.actions}>
+            <AppButton style={styles.actionButton} onPress={startNextWorkout}>
+              Start Next Workout
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              style={styles.actionButton}
+              onPress={() => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] })}
+            >
+              Back to Home
+            </AppButton>
+          </View>
+        ) : (
+          <AppButton
+            style={styles.doneButton}
+            onPress={() => navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] })}
+          >
+            Back to Home
+          </AppButton>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -67,12 +106,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   container: {
-    flex: 1,
     backgroundColor: colors.background,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.lg,
     paddingBottom: spacing.lg,
     gap: spacing.md,
+    flexGrow: 1,
+  },
+  header: {
+    gap: 4,
+  },
+  eyebrow: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   title: {
     color: colors.text,
@@ -80,9 +129,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   subtitle: {
-    marginTop: 4,
     color: colors.mutedText,
     fontSize: typography.body,
+    lineHeight: 22,
   },
   statsGrid: {
     gap: spacing.sm,
@@ -103,41 +152,46 @@ const styles = StyleSheet.create({
   },
   statValue: {
     color: colors.text,
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '700',
     letterSpacing: -0.2,
   },
-  insightsCard: {
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-    gap: spacing.sm,
-  },
-  insightsTitle: {
-    color: colors.primary,
+  sectionLabel: {
+    color: colors.mutedText,
     fontSize: typography.caption,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  insightsBody: {
+  feedbackText: {
+    color: colors.text,
+    fontSize: typography.body,
+    lineHeight: 24,
+  },
+  nextTitle: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '700',
+  },
+  nextBody: {
     color: colors.text,
     fontSize: typography.body,
     lineHeight: 22,
   },
+  supportText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
   doneButton: {
     marginTop: 'auto',
-    height: 56,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primary,
+    minHeight: 56,
   },
-  doneButtonText: {
-    color: colors.primaryText,
-    fontSize: typography.body,
-    fontWeight: '700',
+  actions: {
+    marginTop: 'auto',
+    gap: spacing.sm,
+  },
+  actionButton: {
+    minHeight: 56,
   },
 });

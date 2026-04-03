@@ -7,12 +7,12 @@ export type RootStackParamList = {
   Home: undefined;
 };
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const Stack = createNativeStackNavigator<RootStackParamList, undefined>();
 
 export default function AppNavigator(): React.JSX.Element {
   return (
     <NavigationContainer>
-      <Stack.Navigator>
+      <Stack.Navigator id={undefined}>
         <Stack.Screen
           name="Home"
           component={HomeScreen}

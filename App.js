@@ -1,1 +1,1 @@
-export { default } from "./Workout_tracker/fitness_coach_app/frontend/App";
+export { default } from "./vpulz_mobile/App";

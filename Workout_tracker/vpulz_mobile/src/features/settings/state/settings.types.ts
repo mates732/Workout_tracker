@@ -77,6 +77,7 @@ export type CalendarSettings = {
   entries: Record<string, CalendarDayState>;
   planOverrides: Record<string, string>;
   exerciseOverrides: Record<string, string[]>;
+  routineColors: Record<string, string>;
 };
 
 export type OnboardingSettings = {
@@ -133,6 +134,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
     entries: {},
     planOverrides: {},
     exerciseOverrides: {},
+    routineColors: {},
   },
   notifications: {
     workoutReminders: true,

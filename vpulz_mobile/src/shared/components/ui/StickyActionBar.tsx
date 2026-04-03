@@ -1,11 +1,20 @@
 import { PropsWithChildren } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing } from '../../theme/tokens';
 
-type StickyActionBarProps = PropsWithChildren;
+type StickyActionBarProps = PropsWithChildren<{
+  style?: StyleProp<ViewStyle>;
+}>;
 
-export function StickyActionBar({ children }: StickyActionBarProps) {
-  return <View style={styles.container}>{children}</View>;
+export function StickyActionBar({ children, style }: StickyActionBarProps) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={[styles.container, { paddingBottom: Math.max(20, insets.bottom + spacing.sm) }, style]}>
+      {children}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -16,7 +25,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
-    paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.background,

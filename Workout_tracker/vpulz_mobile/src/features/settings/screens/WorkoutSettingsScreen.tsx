@@ -16,8 +16,10 @@ export function WorkoutSettingsScreen() {
         <View style={styles.profileRow}>
           <View style={[styles.avatar, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
             <Text style={[styles.avatarLabel, { color: colors.text }]}>{(settings.profile.name || 'A').slice(0, 1).toUpperCase()}</Text>
+          import { useWorkoutFlow } from '../../../shared/state/WorkoutFlowContext';
           </View>
           <View style={styles.profileTextWrap}>
+            const { settings: workoutSettings, updateSettings: updateWorkoutSettings } = useWorkoutFlow();
             <Text style={[styles.profileName, { color: colors.text }]}>{settings.profile.name || 'ATHLETE'}</Text>
             <Text style={[styles.profileMeta, { color: colors.textMuted }]}>PRO MEMBER • SINCE 2023</Text>
           </View>
@@ -38,6 +40,38 @@ export function WorkoutSettingsScreen() {
             }
           >
             <Text style={[styles.modeActive, { color: colors.background }]}>{settings.app.themeMode.toUpperCase()}</Text>
+        
+                  <View style={[{ paddingTop: 8, paddingBottom: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}> 
+                    <Text style={[styles.rowLabel, { color: colors.text, marginBottom: 8 }]}>WORKOUT COLORS</Text>
+                    {['push', 'pull', 'legs'].map((key) => {
+                      const label = key.toUpperCase();
+                      const currentColor = workoutSettings?.splitConfig?.colors?.[key as 'push' | 'pull' | 'legs'] ?? '#FF6B6B';
+                      return (
+                        <Pressable
+                          key={key}
+                          style={[styles.settingRow, { borderBottomColor: colors.border }]}
+                          onPress={() => {
+                            const PALETTE = ['#FF6B6B', '#FFB86B', '#FFD86B', '#7AB3FF', '#7AE1AB', '#D9A7FF'];
+                            const idx = PALETTE.indexOf(currentColor);
+                            const next = PALETTE[(idx + 1) % PALETTE.length];
+                            updateWorkoutSettings((current) => ({
+                              ...current,
+                              splitConfig: {
+                                ...(current.splitConfig ?? { colors: { push: '#FF6B6B', pull: '#7AB3FF', legs: '#A6FF7A' } }),
+                                colors: {
+                                  ...(current.splitConfig?.colors ?? {}),
+                                  [key]: next,
+                                },
+                              },
+                            }));
+                          }}
+                        >
+                          <Text style={[styles.rowLabel, { color: colors.text }]}>{label}</Text>
+                          <View style={{ width: 28, height: 20, borderRadius: 6, backgroundColor: currentColor, borderWidth: 1, borderColor: colors.border }} />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
           </Pressable>
         </View>
 

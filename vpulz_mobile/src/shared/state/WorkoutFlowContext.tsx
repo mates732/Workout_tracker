@@ -10,24 +10,44 @@ import {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  addExerciseToWorkout as addExerciseToWorkoutApi,
   type ConnectionConfig,
   type ExerciseItem,
   type ProgressResponse,
   type SetPatchPayload,
   type SetResponse,
+  type SetSuggestion,
+  type SetType,
+  type WorkoutExerciseState,
   type WorkoutSession,
   type WorkoutState,
-  addExerciseToWorkout,
   finishWorkoutSession,
   getActiveWorkout,
   getExerciseProgress,
   getWorkoutState,
-  logSet,
+  logSet as logSetApi,
   searchExercises,
-  startWorkoutSession,
-  updateSet,
+  updateSet as updateSetApi,
 } from '../api/workoutApi';
 import { searchInternetExerciseLibrary } from '../api/exerciseLibraryApi';
+import {
+  buildAdaptiveWorkoutPlan,
+  buildSetFeedback,
+  buildSetSuggestion,
+  findPlanExercise,
+  generatePlannedWorkouts,
+  summarizeFinishedWorkout,
+  trimWorkoutHistory,
+  type AdaptiveWorkoutPlan,
+  type LastWorkoutSummary,
+  type PlannedWorkout,
+} from './settingsLogic';
+import {
+  defaultUserAppSettings,
+  loadUserAppSettings,
+  saveUserAppSettings,
+  type UserAppSettings,
+} from './userAppSettingsStore';
 
 const DEFAULT_CONNECTION: ConnectionConfig = {
   baseUrl: 'http://192.168.1.10:8000',
@@ -38,6 +58,8 @@ const DEFAULT_CONNECTION: ConnectionConfig = {
 type AddExercisePayload = {
   exercise_id?: number;
   exercise_name?: string;
+  muscle_group?: string;
+  equipment?: string;
 };
 
 type LogSetPayload = {
@@ -49,6 +71,7 @@ type LogSetPayload = {
   rpe: number;
   duration: number;
   completed: boolean;
+  set_type?: SetType;
 };
 
 export type WorkoutSessionState = {
@@ -59,31 +82,79 @@ export type WorkoutSessionState = {
   minimized: boolean;
 };
 
-type PersistedWorkoutSessionState = Pick<
-  WorkoutSessionState,
-  'id' | 'startTime' | 'exercises' | 'isActive' | 'minimized'
->;
+export type FinishedWorkoutResult = {
+  workout: WorkoutSession;
+  summary: LastWorkoutSummary;
+  nextPlan: AdaptiveWorkoutPlan;
+};
 
-const SESSION_STORAGE_KEY = 'vpulz.workout.session.v1';
+export type CurrentWorkout = {
+  session: WorkoutSessionState;
+  workout: WorkoutSession;
+  state: WorkoutState;
+  plan: AdaptiveWorkoutPlan;
+  latestSetSuggestion: SetSuggestion | null;
+};
+
+export type AppState = {
+  settings: UserAppSettings;
+  currentWorkout: CurrentWorkout | null;
+  workoutHistory: LastWorkoutSummary[];
+  plannedWorkouts: PlannedWorkout[];
+};
+
+type PersistedWorkoutState = {
+  currentWorkout: CurrentWorkout | null;
+};
+
+type LegacyPersistedWorkoutState = {
+  session: WorkoutSessionState;
+  activeWorkout: WorkoutSession | null;
+  workoutState: WorkoutState | null;
+  workoutPlan: AdaptiveWorkoutPlan | null;
+  latestSetSuggestion: SetSuggestion | null;
+};
 
 type WorkoutFlowContextValue = {
+  appState: AppState;
   connection: ConnectionConfig;
   setConnection: (next: ConnectionConfig) => void;
+  settings: UserAppSettings;
+  updateSettings: (updater: (current: UserAppSettings) => UserAppSettings) => void;
+  resetSettings: () => void;
   session: WorkoutSessionState;
   elapsedSeconds: number;
-  busy: boolean;
   isInitializing: boolean;
   error: string | null;
   clearError: () => void;
   isWorkoutMinimized: boolean;
   minimizeWorkout: () => void;
   restoreWorkout: () => void;
+  currentWorkout: CurrentWorkout | null;
   activeWorkout: WorkoutSession | null;
   workoutState: WorkoutState | null;
+  workoutPlan: AdaptiveWorkoutPlan | null;
+  plannedWorkouts: PlannedWorkout[];
+  workoutHistory: LastWorkoutSummary[];
+  lastWorkoutSummary: LastWorkoutSummary | null;
+  latestSetSuggestion: SetSuggestion | null;
   refreshActiveWorkout: () => Promise<WorkoutSession | null>;
   refreshWorkoutState: () => Promise<WorkoutState | null>;
-  startOrResumeWorkout: () => Promise<WorkoutSession>;
-  finishActiveWorkout: () => Promise<WorkoutSession>;
+  setCurrentWorkout: (plan: AdaptiveWorkoutPlan) => WorkoutSession;
+  startEmptyWorkout: () => WorkoutSession;
+  startOrResumeWorkout: () => WorkoutSession;
+  startPlannedWorkout: (planned: PlannedWorkout) => WorkoutSession;
+  finishActiveWorkout: () => Promise<FinishedWorkoutResult>;
+  /**
+   * Complete the active workout using a minimal local result payload.
+   * This updates workoutHistory, plannedWorkouts, clears currentWorkout and resets timers.
+   */
+  completeActiveWorkoutLocal: (payload: { date: string; exercises: WorkoutExerciseState[]; performance: number }) => void;
+  /**
+   * Reset the active workout immediately without saving history.
+   * Clears `currentWorkout` and resets the elapsed timer to 0.
+   */
+  resetActiveWorkout: () => void;
   addExerciseToActiveWorkout: (payload: AddExercisePayload) => Promise<void>;
   logSetForActiveWorkout: (payload: LogSetPayload) => Promise<SetResponse>;
   patchSetLog: (setId: string, payload: SetPatchPayload) => Promise<SetResponse>;
@@ -92,6 +163,10 @@ type WorkoutFlowContextValue = {
 };
 
 const WorkoutFlowContext = createContext<WorkoutFlowContextValue | null>(null);
+
+const SESSION_STORAGE_KEY = 'vpulz.workout.session.v4';
+const LAST_WORKOUT_STORAGE_KEY = 'vpulz.workout.last-summary.v1';
+const WORKOUT_HISTORY_STORAGE_KEY = 'vpulz.workout.history.v1';
 
 function createSessionId(): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
@@ -116,24 +191,6 @@ function createActiveSession(overrides?: Partial<WorkoutSessionState>): WorkoutS
     isActive: true,
     minimized: Boolean(overrides?.minimized),
   };
-}
-
-function normalizeSessionFromWorkout(
-  active: WorkoutSession | null,
-  workout: WorkoutState | null,
-  minimized: boolean
-): WorkoutSessionState {
-  if (!active) {
-    return createInactiveSession();
-  }
-
-  const exercises = workout?.exercises.map((item) => item.name) ?? [];
-  return createActiveSession({
-    id: active.id,
-    startTime: active.start_time,
-    exercises,
-    minimized,
-  });
 }
 
 function toElapsedSeconds(startTime: string): number {
@@ -174,44 +231,697 @@ function messageFromUnknown(error: unknown): string {
   return 'Unexpected error';
 }
 
-function parsePersistedSession(raw: string): WorkoutSessionState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<PersistedWorkoutSessionState>;
-    const id = typeof parsed.id === 'string' ? parsed.id.trim() : '';
-    const startTime = typeof parsed.startTime === 'string' ? parsed.startTime.trim() : '';
-    const exercises = Array.isArray(parsed.exercises)
-      ? parsed.exercises.filter((item): item is string => typeof item === 'string')
-      : [];
-    const isActive = Boolean(parsed.isActive);
-    const minimized = Boolean(parsed.minimized);
+function normalizeSessionFromWorkout(
+  active: WorkoutSession | null,
+  workout: WorkoutState | null,
+  minimized: boolean
+): WorkoutSessionState {
+  if (!active) {
+    return createInactiveSession();
+  }
 
-    if (!id || !startTime || !isActive) {
+  return createActiveSession({
+    id: active.id,
+    startTime: active.start_time,
+    exercises: workout?.exercises.map((item) => item.name) ?? [],
+    minimized,
+  });
+}
+
+function isWorkoutSession(value: unknown): value is WorkoutSession {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.user_id === 'string' &&
+    typeof candidate.status === 'string' &&
+    typeof candidate.start_time === 'string'
+  );
+}
+
+function isWorkoutState(value: unknown): value is WorkoutState {
+  if (!isWorkoutSession(value)) {
+    return false;
+  }
+
+  const candidate = value as unknown as Record<string, unknown>;
+  return Array.isArray(candidate.exercises);
+}
+
+function isAdaptiveWorkoutPlan(value: unknown): value is AdaptiveWorkoutPlan {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === 'string' &&
+    typeof candidate.splitKey === 'string' &&
+    typeof candidate.title === 'string' &&
+    Array.isArray(candidate.exercises)
+  );
+}
+
+function isSetSuggestion(value: unknown): value is SetSuggestion {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.next_weight_kg === 'number' &&
+    typeof candidate.next_reps === 'number' &&
+    typeof candidate.action === 'string' &&
+    typeof candidate.trend === 'string' &&
+    Array.isArray(candidate.adjustments)
+  );
+}
+
+function sanitizeSession(value: unknown): WorkoutSessionState | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Partial<WorkoutSessionState>;
+  if (
+    typeof candidate.id !== 'string' ||
+    typeof candidate.startTime !== 'string' ||
+    !Array.isArray(candidate.exercises) ||
+    typeof candidate.isActive !== 'boolean'
+  ) {
+    return null;
+  }
+
+  return {
+    id: candidate.id,
+    startTime: candidate.startTime,
+    exercises: candidate.exercises.filter((item): item is string => typeof item === 'string'),
+    isActive: candidate.isActive,
+    minimized: Boolean(candidate.minimized),
+  };
+}
+
+function sanitizeCurrentWorkout(value: unknown): CurrentWorkout | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const session = sanitizeSession(candidate.session);
+  const workout = isWorkoutSession(candidate.workout) ? candidate.workout : null;
+  const state = isWorkoutState(candidate.state) ? candidate.state : null;
+  const plan = isAdaptiveWorkoutPlan(candidate.plan) ? candidate.plan : null;
+  const latest =
+    candidate.latestSetSuggestion == null || isSetSuggestion(candidate.latestSetSuggestion)
+      ? (candidate.latestSetSuggestion as SetSuggestion | null)
+      : null;
+
+  if (!session || !session.isActive || !workout || !state || !plan) {
+    return null;
+  }
+
+  return {
+    session: {
+      ...session,
+      exercises: state.exercises.map((item) => item.name),
+      isActive: true,
+    },
+    workout,
+    state,
+    plan,
+    latestSetSuggestion: latest,
+  };
+}
+
+function parsePersistedCurrentWorkout(raw: string): CurrentWorkout | null {
+  try {
+    const parsed = JSON.parse(raw) as PersistedWorkoutState | LegacyPersistedWorkoutState | CurrentWorkout;
+    const direct = sanitizeCurrentWorkout((parsed as PersistedWorkoutState).currentWorkout ?? parsed);
+    if (direct) {
+      return direct;
+    }
+
+    const legacy = parsed as LegacyPersistedWorkoutState;
+    const session = sanitizeSession(legacy.session);
+    if (
+      !session ||
+      !session.isActive ||
+      !legacy.activeWorkout ||
+      !legacy.workoutState ||
+      !legacy.workoutPlan ||
+      !isWorkoutSession(legacy.activeWorkout) ||
+      !isWorkoutState(legacy.workoutState) ||
+      !isAdaptiveWorkoutPlan(legacy.workoutPlan)
+    ) {
       return null;
     }
 
-    return createActiveSession({
-      id,
-      startTime,
-      exercises,
-      minimized,
-    });
+    return {
+      session: {
+        ...session,
+        exercises: legacy.workoutState.exercises.map((item) => item.name),
+        isActive: true,
+      },
+      workout: legacy.activeWorkout,
+      state: legacy.workoutState,
+      plan: legacy.workoutPlan,
+      latestSetSuggestion:
+        legacy.latestSetSuggestion && isSetSuggestion(legacy.latestSetSuggestion)
+          ? legacy.latestSetSuggestion
+          : null,
+    };
   } catch {
     return null;
   }
 }
 
+function sanitizeLastWorkoutSummary(value: unknown): LastWorkoutSummary | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const parsed = value as Partial<LastWorkoutSummary>;
+  if (
+    typeof parsed.id !== 'string' ||
+    typeof parsed.completedAt !== 'string' ||
+    typeof parsed.totalVolume !== 'number' ||
+    typeof parsed.totalSets !== 'number' ||
+    typeof parsed.performance !== 'number' ||
+    !Array.isArray(parsed.exercises)
+  ) {
+    return null;
+  }
+
+  return {
+    id: parsed.id,
+    completedAt: parsed.completedAt,
+    durationMinutes: typeof parsed.durationMinutes === 'number' ? parsed.durationMinutes : 0,
+    totalVolume: parsed.totalVolume,
+    totalSets: parsed.totalSets,
+    completedSets: typeof parsed.completedSets === 'number' ? parsed.completedSets : parsed.totalSets,
+    performance: parsed.performance,
+    prs: typeof parsed.prs === 'number' ? parsed.prs : 0,
+    splitKey: typeof parsed.splitKey === 'string' ? parsed.splitKey : 'full body',
+    feedback: typeof parsed.feedback === 'string' || parsed.feedback === null ? parsed.feedback : null,
+    summaryLine: typeof parsed.summaryLine === 'string' ? parsed.summaryLine : '',
+    exercises: parsed.exercises
+      .map((exercise) => {
+        if (!exercise || typeof exercise !== 'object') {
+          return null;
+        }
+        const candidate = exercise as Record<string, unknown>;
+        if (
+          typeof candidate.name !== 'string' ||
+          typeof candidate.sets !== 'number' ||
+          typeof candidate.topWeight !== 'number' ||
+          typeof candidate.topReps !== 'number'
+        ) {
+          return null;
+        }
+        return {
+          name: candidate.name,
+          sets: candidate.sets,
+          topWeight: candidate.topWeight,
+          topReps: candidate.topReps,
+        };
+      })
+      .filter((exercise): exercise is LastWorkoutSummary['exercises'][number] => exercise !== null),
+  };
+}
+
+function parseLastWorkoutSummary(raw: string): LastWorkoutSummary | null {
+  try {
+    return sanitizeLastWorkoutSummary(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function parseWorkoutHistory(raw: string): LastWorkoutSummary[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => sanitizeLastWorkoutSummary(item))
+      .filter((item): item is LastWorkoutSummary => item !== null);
+  } catch {
+    return [];
+  }
+}
+
+function createLocalExerciseId(): string {
+  return `local-exercise-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createLocalSetId(): string {
+  return `local-set-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createExerciseIdFallback(): number {
+  return -Math.floor(Math.random() * 1000000) - 1;
+}
+
+function buildWorkoutStateFromPlan(workout: WorkoutSession, plan: AdaptiveWorkoutPlan): WorkoutState {
+  return {
+    ...workout,
+    exercises: plan.exercises.map((exercise, index) => ({
+      id: createLocalExerciseId(),
+      workout_id: workout.id,
+      exercise_id: createExerciseIdFallback(),
+      name: exercise.name,
+      muscle_group: exercise.muscleGroup,
+      equipment: exercise.equipment,
+      ordering: index,
+      sets: [],
+    })),
+  };
+}
+
+function rebuildWorkoutStateForWorkout(workout: WorkoutSession, current: WorkoutState | null): WorkoutState | null {
+  if (!current) {
+    return null;
+  }
+
+  return {
+    ...current,
+    id: workout.id,
+    user_id: workout.user_id,
+    status: workout.status,
+    start_time: workout.start_time,
+    end_time: workout.end_time,
+    exercises: current.exercises.map((exercise) => ({
+      ...exercise,
+      workout_id: workout.id,
+      sets: exercise.sets.map((setItem) => ({
+        ...setItem,
+        workout_id: workout.id,
+      })),
+    })),
+  };
+}
+
+function addExerciseToState(
+  current: WorkoutState,
+  workout: WorkoutSession,
+  payload: AddExercisePayload
+): WorkoutState {
+  const exerciseName = payload.exercise_name?.trim() || `Exercise ${current.exercises.length + 1}`;
+  const now = new Date().toISOString();
+  const exerciseId = payload.exercise_id ?? createExerciseIdFallback();
+
+  const exercise: WorkoutExerciseState = {
+    id: createLocalExerciseId(),
+    workout_id: workout.id,
+    exercise_id: exerciseId,
+    name: exerciseName,
+    muscle_group: payload.muscle_group?.trim() || 'Custom',
+    equipment: payload.equipment?.trim() || 'Mixed',
+    ordering: current.exercises.length,
+    sets: [
+      {
+        id: createLocalSetId(),
+        workout_id: workout.id,
+        workout_exercise_id: '',
+        exercise_id: exerciseId,
+        weight: 40,
+        reps: 10,
+        rpe: 8,
+        duration: 60,
+        completed: false,
+        set_type: 'normal',
+        volume: 40 * 10,
+        created_at: now,
+        updated_at: now,
+      },
+    ],
+  };
+
+  // Backfill the local set's workout_exercise_id now that we have the exercise id.
+  const nextExercise: WorkoutExerciseState = {
+    ...exercise,
+    sets: exercise.sets.map((setItem) => ({
+      ...setItem,
+      workout_exercise_id: exercise.id,
+      exercise_id: exercise.exercise_id,
+    })),
+  };
+
+  return {
+    ...current,
+    exercises: [...current.exercises, nextExercise],
+  };
+}
+
+function syncExerciseFromRemote(current: WorkoutState, remote: WorkoutExerciseState): WorkoutState {
+  const remoteName = remote.name.trim().toLowerCase();
+
+  const directIndex = current.exercises.findIndex((exercise) => exercise.id === remote.id);
+  if (directIndex >= 0) {
+    const local = current.exercises[directIndex];
+    const nextExercises = [...current.exercises];
+    nextExercises[directIndex] = {
+      ...remote,
+      sets: remote.sets.length ? remote.sets : local.sets,
+    };
+    return {
+      ...current,
+      exercises: nextExercises,
+    };
+  }
+
+  // Prefer matching by ordering + name for local-first inserted exercises.
+  const orderingIndex = current.exercises.findIndex(
+    (exercise) => exercise.ordering === remote.ordering && exercise.name.trim().toLowerCase() === remoteName
+  );
+
+  if (orderingIndex >= 0) {
+    const local = current.exercises[orderingIndex];
+    const nextExercises = [...current.exercises];
+    nextExercises[orderingIndex] = {
+      ...remote,
+      sets: local.sets.length ? local.sets : remote.sets,
+    };
+    return {
+      ...current,
+      exercises: nextExercises,
+    };
+  }
+
+  return {
+    ...current,
+    exercises: [...current.exercises, remote].sort((left, right) => left.ordering - right.ordering),
+  };
+}
+
+function upsertSetInState(
+  current: WorkoutState,
+  workout: WorkoutSession,
+  exercise: WorkoutExerciseState,
+  payload: LogSetPayload
+): WorkoutState {
+  const nextSet = {
+    id: createLocalSetId(),
+    workout_id: workout.id,
+    workout_exercise_id: exercise.id,
+    exercise_id: exercise.exercise_id,
+    weight: payload.weight,
+    reps: payload.reps,
+    rpe: payload.rpe,
+    duration: payload.duration,
+    completed: payload.completed,
+    set_type: payload.set_type ?? 'normal',
+    volume: payload.weight * payload.reps,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  return {
+    ...current,
+    exercises: current.exercises.map((item) =>
+      item.id === exercise.id
+        ? {
+            ...item,
+            sets: [...item.sets, nextSet],
+          }
+        : item
+    ),
+  };
+}
+
+function patchSetInState(current: WorkoutState, setId: string, payload: SetPatchPayload): WorkoutState | null {
+  let found = false;
+
+  const next = {
+    ...current,
+    exercises: current.exercises.map((exercise) => ({
+      ...exercise,
+      sets: exercise.sets.map((setItem) => {
+        if (setItem.id !== setId) {
+          return setItem;
+        }
+
+        found = true;
+        const weight = payload.weight ?? setItem.weight;
+        const reps = payload.reps ?? setItem.reps;
+
+        return {
+          ...setItem,
+          ...payload,
+          weight,
+          reps,
+          volume: weight * reps,
+          updated_at: new Date().toISOString(),
+        };
+      }),
+    })),
+  };
+
+  return found ? next : null;
+}
+
+function upsertExerciseInState(current: WorkoutState, exercise: WorkoutExerciseState): WorkoutState {
+  const matchIndex = current.exercises.findIndex((item) => item.id === exercise.id);
+
+  if (matchIndex >= 0) {
+    const nextExercises = [...current.exercises];
+    nextExercises[matchIndex] = exercise;
+    return {
+      ...current,
+      exercises: nextExercises,
+    };
+  }
+
+  return {
+    ...current,
+    exercises: [...current.exercises, exercise].sort((left, right) => left.ordering - right.ordering),
+  };
+}
+
+function upsertLoggedSetInState(current: WorkoutState, setResponse: SetResponse): WorkoutState {
+  const responseExerciseId = setResponse.exercise?.id;
+  const responseExerciseNumericId = setResponse.exercise?.exercise_id;
+  const responseSet = setResponse.set;
+
+  return {
+    ...current,
+    exercises: current.exercises.map((exercise) => {
+      const matchesExercise =
+        (responseExerciseId && exercise.id === responseExerciseId) ||
+        (typeof responseExerciseNumericId === 'number' && exercise.exercise_id === responseExerciseNumericId) ||
+        exercise.id === responseSet.workout_exercise_id ||
+        exercise.exercise_id === responseSet.exercise_id;
+
+      if (!matchesExercise) {
+        return exercise;
+      }
+
+      const existingIndex = exercise.sets.findIndex((setItem) => setItem.id === responseSet.id);
+      if (existingIndex >= 0) {
+        const nextSets = [...exercise.sets];
+        nextSets[existingIndex] = responseSet;
+        return {
+          ...exercise,
+          sets: nextSets,
+        };
+      }
+
+      return {
+        ...exercise,
+        sets: [...exercise.sets, responseSet],
+      };
+    }),
+  };
+}
+
+function findTargetExercise(workoutState: WorkoutState, payload: LogSetPayload): WorkoutExerciseState | null {
+  if (payload.workout_exercise_id) {
+    return workoutState.exercises.find((exercise) => exercise.id === payload.workout_exercise_id) ?? null;
+  }
+
+  if (typeof payload.exercise_id === 'number') {
+    return workoutState.exercises.find((exercise) => exercise.exercise_id === payload.exercise_id) ?? null;
+  }
+
+  if (payload.exercise_name) {
+    return (
+      workoutState.exercises.find(
+        (exercise) => exercise.name.trim().toLowerCase() === payload.exercise_name?.trim().toLowerCase()
+      ) ?? null
+    );
+  }
+
+  return null;
+}
+
+function countTotalSets(workoutState: WorkoutState): number {
+  return workoutState.exercises.reduce(
+    (sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length,
+    0
+  );
+}
+
+function syncSessionExerciseNames(currentWorkout: CurrentWorkout): CurrentWorkout {
+  return {
+    ...currentWorkout,
+    session: {
+      ...currentWorkout.session,
+      exercises: currentWorkout.state.exercises.map((exercise) => exercise.name),
+      isActive: true,
+    },
+  };
+}
+
+function createCurrentWorkoutFromPlan(
+  connection: ConnectionConfig,
+  plan: AdaptiveWorkoutPlan,
+  preserved?: Partial<WorkoutSessionState>
+): CurrentWorkout {
+  const session = createActiveSession({
+    id: preserved?.id,
+    startTime: preserved?.startTime,
+    minimized: preserved?.minimized,
+    exercises: plan.exercises.map((exercise) => exercise.name),
+  });
+  const workout = toLocalWorkoutSession(connection, session);
+  const state = buildWorkoutStateFromPlan(workout, plan);
+
+  return {
+    session: {
+      ...session,
+      exercises: state.exercises.map((exercise) => exercise.name),
+      isActive: true,
+    },
+    workout,
+    state,
+    plan,
+    latestSetSuggestion: null,
+  };
+}
+
+function createEmptyWorkoutPlan(): AdaptiveWorkoutPlan {
+  return {
+    id: `manual-${Date.now()}`,
+    splitKey: 'manual',
+    title: 'New Workout',
+    summary: 'Start by adding your first exercise.',
+    recommendation: 'Build your session manually and track each set.',
+    inlineCoachIntro: 'Add an exercise and begin logging sets.',
+    recoveryNote: 'Stay consistent and keep form clean.',
+    estimatedDurationMin: 45,
+    progressionLabel: 'hold',
+    exercises: [],
+  };
+}
+
+function createCurrentWorkoutFromRemote(
+  workout: WorkoutSession,
+  state: WorkoutState,
+  plan: AdaptiveWorkoutPlan,
+  latestSetSuggestion: SetSuggestion | null,
+  minimized: boolean
+): CurrentWorkout {
+  return {
+    session: createActiveSession({
+      id: workout.id,
+      startTime: workout.start_time,
+      minimized,
+      exercises: state.exercises.map((exercise) => exercise.name),
+    }),
+    workout,
+    state,
+    plan,
+    latestSetSuggestion,
+  };
+}
+
+function createDefaultAppState(): AppState {
+  return {
+    settings: defaultUserAppSettings,
+    currentWorkout: null,
+    workoutHistory: [],
+    plannedWorkouts: generatePlannedWorkouts(
+      defaultUserAppSettings,
+      null,
+      defaultUserAppSettings.general.calendar_preview_days
+    ),
+  };
+}
+
 export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   const [connection, setConnectionState] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
-  const [session, setSession] = useState<WorkoutSessionState>(() => createInactiveSession());
+  const [appState, setAppState] = useState<AppState>(() => createDefaultAppState());
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
-  const [pendingCount, setPendingCount] = useState<number>(0);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeWorkout, setActiveWorkout] = useState<WorkoutSession | null>(null);
-  const [workoutState, setWorkoutState] = useState<WorkoutState | null>(null);
-  const startResumePromiseRef = useRef<Promise<WorkoutSession> | null>(null);
+  const appStateRef = useRef(appState);
 
-  const busy = pendingCount > 0;
+  useEffect(() => {
+    appStateRef.current = appState;
+  }, [appState]);
+
+  const settings = appState.settings;
+  const currentWorkout = appState.currentWorkout;
+  const workoutHistory = appState.workoutHistory;
+  const plannedWorkouts = appState.plannedWorkouts;
+  const lastWorkoutSummary = workoutHistory[0] ?? null;
+  const activeWorkout = currentWorkout?.workout ?? null;
+  const workoutState = currentWorkout?.state ?? null;
+  const latestSetSuggestion = currentWorkout?.latestSetSuggestion ?? null;
+
+  const workoutPlan = useMemo<AdaptiveWorkoutPlan | null>(() => {
+    if (currentWorkout) {
+      return currentWorkout.plan;
+    }
+
+    return buildAdaptiveWorkoutPlan(settings, lastWorkoutSummary, workoutHistory);
+  }, [currentWorkout, lastWorkoutSummary, settings, workoutHistory]);
+
+  const session = useMemo<WorkoutSessionState>(() => {
+    return currentWorkout?.session ?? createInactiveSession();
+  }, [currentWorkout]);
+
+  // Timer lifecycle: start when a workout is active, stop/reset when cleared.
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    // Clear any existing timer
+    if (timerRef.current != null) {
+      clearInterval(timerRef.current as unknown as number);
+      timerRef.current = null;
+    }
+
+    if (!currentWorkout) {
+      // no active workout — ensure timer reset
+      setElapsedSeconds(0);
+      return;
+    }
+
+    // Initialize elapsed seconds from session start time then start interval
+    try {
+      setElapsedSeconds(() => toElapsedSeconds(currentWorkout.session.startTime));
+    } catch {
+      setElapsedSeconds(0);
+    }
+
+    // Start per-second tick
+    const id = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    // store id and ensure cleanup
+    timerRef.current = id as unknown as number;
+    return () => {
+      if (timerRef.current != null) {
+        clearInterval(timerRef.current as unknown as number);
+        timerRef.current = null;
+      }
+    };
+  }, [currentWorkout?.session.startTime]);
 
   const setConnection = useCallback((next: ConnectionConfig) => {
     setConnectionState({
@@ -221,196 +931,597 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     });
   }, []);
 
+  const updateSettings = useCallback((updater: (current: UserAppSettings) => UserAppSettings) => {
+    setAppState((current) => {
+      const nextSettings = updater(current.settings);
+      const nextHistory = trimWorkoutHistory(current.workoutHistory, nextSettings);
+      void saveUserAppSettings(nextSettings).catch(() => undefined);
+
+      return {
+        settings: nextSettings,
+        currentWorkout: current.currentWorkout,
+        workoutHistory: nextHistory,
+        plannedWorkouts: generatePlannedWorkouts(
+          nextSettings,
+          nextHistory[0] ?? null,
+          nextSettings.general.calendar_preview_days
+        ),
+      };
+    });
+  }, []);
+
+  const resetSettings = useCallback(() => {
+    setAppState((current) => ({
+      settings: defaultUserAppSettings,
+      currentWorkout: current.currentWorkout,
+      workoutHistory: trimWorkoutHistory(current.workoutHistory, defaultUserAppSettings),
+      plannedWorkouts: generatePlannedWorkouts(
+        defaultUserAppSettings,
+        current.workoutHistory[0] ?? null,
+        defaultUserAppSettings.general.calendar_preview_days
+      ),
+    }));
+    void saveUserAppSettings(defaultUserAppSettings).catch(() => undefined);
+  }, []);
+
   const runAction = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
-    setPendingCount((current) => current + 1);
     setError(null);
     try {
       return await fn();
     } catch (err: unknown) {
-      const message = messageFromUnknown(err);
-      setError(message);
+      setError(messageFromUnknown(err));
       throw err;
-    } finally {
-      setPendingCount((current) => Math.max(0, current - 1));
     }
   }, []);
 
-  const fetchWorkoutStateInternal = useCallback(
-    async (workoutId: string): Promise<WorkoutState> => {
-      const result = await getWorkoutState(connection, workoutId);
-      setWorkoutState(result.workout);
-      setSession((current) => {
-        if (!current.isActive || current.id !== result.workout.id) {
-          return current;
+  const refreshActiveWorkout = useCallback(async (): Promise<WorkoutSession | null> => {
+    const snapshot = appStateRef.current;
+    if (snapshot.currentWorkout) {
+      return snapshot.currentWorkout.workout;
+    }
+
+    return runAction(async () => {
+      try {
+        requiredConnection(connection);
+        const result = await getActiveWorkout(connection, connection.userId);
+        if (!result.workout) {
+          return null;
         }
 
-        const nextExercises = result.workout.exercises.map((item) => item.name);
-        const sameExercises =
-          current.exercises.length === nextExercises.length &&
-          current.exercises.every((value, index) => value === nextExercises[index]);
+        const plan = buildAdaptiveWorkoutPlan(snapshot.settings, snapshot.workoutHistory[0] ?? null, snapshot.workoutHistory);
+        const remoteStateResult = await getWorkoutState(connection, result.workout.id).catch(() => null);
+        const remoteState =
+          remoteStateResult?.workout ??
+          rebuildWorkoutStateForWorkout(result.workout, null) ??
+          buildWorkoutStateFromPlan(result.workout, plan);
+        const nextCurrentWorkout = createCurrentWorkoutFromRemote(result.workout, remoteState, plan, null, false);
 
-        if (sameExercises) {
-          return current;
-        }
-
-        return {
+        setAppState((current) => ({
           ...current,
-          exercises: nextExercises,
-        };
-      });
-      return result.workout;
+          currentWorkout: nextCurrentWorkout,
+        }));
+
+        return result.workout;
+      } catch {
+        return null;
+      }
+    });
+  }, [connection, runAction]);
+
+  const refreshWorkoutState = useCallback(async (): Promise<WorkoutState | null> => {
+    const snapshot = appStateRef.current;
+    const current = snapshot.currentWorkout;
+    if (!current) {
+      return null;
+    }
+
+    return runAction(async () => {
+      try {
+        requiredConnection(connection);
+        const result = await getWorkoutState(connection, current.workout.id);
+        const nextCurrentWorkout = createCurrentWorkoutFromRemote(
+          current.workout,
+          result.workout,
+          current.plan,
+          current.latestSetSuggestion,
+          current.session.minimized
+        );
+
+        setAppState((current) => ({
+          ...current,
+          currentWorkout: nextCurrentWorkout,
+        }));
+
+        return result.workout;
+      } catch {
+        return current.state;
+      }
+    });
+  }, [connection, runAction]);
+
+  const setCurrentWorkout = useCallback(
+    (plan: AdaptiveWorkoutPlan): WorkoutSession => {
+      setError(null);
+
+      const snapshot = appStateRef.current;
+      if (snapshot.currentWorkout) {
+        const restored = syncSessionExerciseNames({
+          ...snapshot.currentWorkout,
+          session: {
+            ...snapshot.currentWorkout.session,
+            minimized: false,
+            isActive: true,
+          },
+        });
+
+        setAppState((current) => ({
+          ...current,
+          currentWorkout: restored,
+        }));
+
+        return restored.workout;
+      }
+
+      const nextCurrentWorkout = createCurrentWorkoutFromPlan(connection, plan);
+      setAppState((current) => ({
+        ...current,
+        currentWorkout: nextCurrentWorkout,
+      }));
+      return nextCurrentWorkout.workout;
     },
     [connection]
   );
 
-  const refreshActiveWorkout = useCallback(async (): Promise<WorkoutSession | null> => {
-    return runAction(async () => {
-      requiredConnection(connection);
-      const result = await getActiveWorkout(connection, connection.userId);
-      setActiveWorkout(result.workout);
+  const startOrResumeWorkout = useCallback((): WorkoutSession => {
+    setError(null);
 
-      if (!result.workout) {
-        setWorkoutState(null);
-        setSession(createInactiveSession());
-        return null;
-      }
+    const snapshot = appStateRef.current;
+    if (snapshot.currentWorkout) {
+      const restored = syncSessionExerciseNames({
+        ...snapshot.currentWorkout,
+        session: {
+          ...snapshot.currentWorkout.session,
+          minimized: false,
+          isActive: true,
+        },
+      });
 
-      const details = await fetchWorkoutStateInternal(result.workout.id);
-      setSession((current) => normalizeSessionFromWorkout(result.workout, details, current.minimized));
-      return result.workout;
-    });
-  }, [connection, fetchWorkoutStateInternal, runAction]);
+      setAppState((current) => ({
+        ...current,
+        currentWorkout: restored,
+      }));
 
-  const refreshWorkoutState = useCallback(async (): Promise<WorkoutState | null> => {
-    return runAction(async () => {
-      if (!activeWorkout) {
-        setWorkoutState(null);
-        return null;
-      }
-
-      return fetchWorkoutStateInternal(activeWorkout.id);
-    });
-  }, [activeWorkout, fetchWorkoutStateInternal, runAction]);
-
-  const startOrResumeWorkout = useCallback(async (): Promise<WorkoutSession> => {
-    if (startResumePromiseRef.current) {
-      return startResumePromiseRef.current;
+      return restored.workout;
     }
 
-    const promise = runAction(async () => {
-      if (activeWorkout) {
-        setSession((current) => (current.minimized ? { ...current, minimized: false } : current));
-        return activeWorkout;
+    const plan = buildAdaptiveWorkoutPlan(snapshot.settings, snapshot.workoutHistory[0] ?? null, snapshot.workoutHistory);
+    return setCurrentWorkout(plan);
+  }, [setCurrentWorkout]);
+
+  const startEmptyWorkout = useCallback((): WorkoutSession => {
+    setError(null);
+
+    const snapshot = appStateRef.current;
+    if (snapshot.currentWorkout) {
+      const restored = syncSessionExerciseNames({
+        ...snapshot.currentWorkout,
+        session: {
+          ...snapshot.currentWorkout.session,
+          minimized: false,
+          isActive: true,
+        },
+      });
+
+      setAppState((current) => ({
+        ...current,
+        currentWorkout: restored,
+      }));
+
+      return restored.workout;
+    }
+
+    return setCurrentWorkout(createEmptyWorkoutPlan());
+  }, [setCurrentWorkout]);
+
+  const startPlannedWorkout = useCallback(
+    (planned: PlannedWorkout): WorkoutSession => {
+      if (appStateRef.current.currentWorkout) {
+        return startOrResumeWorkout();
       }
 
-      if (session.isActive) {
-        try {
-          const restored = await fetchWorkoutStateInternal(session.id);
-          setActiveWorkout(restored);
-          setSession((current) => ({
-            ...normalizeSessionFromWorkout(restored, restored, current.minimized),
-            minimized: false,
-          }));
-          return restored;
-        } catch {
-          const localWorkout = toLocalWorkoutSession(connection, session);
-          setActiveWorkout(localWorkout);
-          return localWorkout;
-        }
-      }
+      return setCurrentWorkout(planned.preview);
+    },
+    [setCurrentWorkout, startOrResumeWorkout]
+  );
 
-      requiredConnection(connection);
-      try {
-        const started = await startWorkoutSession(connection, connection.userId);
-        setActiveWorkout(started.workout);
-        await fetchWorkoutStateInternal(started.workout.id);
-        setSession(
-          createActiveSession({
-            id: started.workout.id,
-            startTime: started.workout.start_time,
-            minimized: false,
-          })
-        );
-        return started.workout;
-      } catch {
-        const fallbackSession = createActiveSession({ minimized: false });
-        const localWorkout = toLocalWorkoutSession(connection, fallbackSession);
-        setSession(fallbackSession);
-        setActiveWorkout(localWorkout);
-        setWorkoutState(null);
-        return localWorkout;
-      }
-    }).finally(() => {
-      if (startResumePromiseRef.current === promise) {
-        startResumePromiseRef.current = null;
-      }
-    });
-
-    startResumePromiseRef.current = promise;
-    return promise;
-  }, [activeWorkout, connection, fetchWorkoutStateInternal, runAction, session]);
-
-  const finishActiveWorkout = useCallback(async (): Promise<WorkoutSession> => {
+  const finishActiveWorkout = useCallback(async (): Promise<FinishedWorkoutResult> => {
     return runAction(async () => {
-      if (!activeWorkout) {
+      const snapshot = appStateRef.current;
+      const active = snapshot.currentWorkout;
+      if (!active) {
         throw new Error('No active workout to finish');
       }
 
-      const finished = await finishWorkoutSession(connection, activeWorkout.id);
-      setActiveWorkout(null);
-      setWorkoutState(null);
-      setSession(createInactiveSession());
+      const completedAt = new Date().toISOString();
+      const summary = summarizeFinishedWorkout({
+        workoutId: active.workout.id,
+        completedAt,
+        elapsedSeconds,
+        exercises: active.state.exercises,
+        plan: active.plan,
+        previousSummary: snapshot.workoutHistory[0] ?? null,
+        history: snapshot.workoutHistory,
+        settings: snapshot.settings,
+      });
+      const nextHistory = trimWorkoutHistory(
+        [
+          summary,
+          ...snapshot.workoutHistory.filter(
+            (item) => item.id !== summary.id || item.completedAt !== summary.completedAt
+          ),
+        ],
+        snapshot.settings
+      );
+      const nextPlan = buildAdaptiveWorkoutPlan(snapshot.settings, summary, nextHistory);
+      const nextPlannedWorkouts = generatePlannedWorkouts(
+        snapshot.settings,
+        summary,
+        snapshot.settings.general.calendar_preview_days
+      );
+      const finishedWorkout: WorkoutSession = {
+        ...active.workout,
+        status: 'finished',
+        end_time: completedAt,
+      };
+
+      setAppState({
+        settings: snapshot.settings,
+        currentWorkout: null,
+        workoutHistory: nextHistory,
+        plannedWorkouts: nextPlannedWorkouts,
+      });
       setElapsedSeconds(0);
-      return finished.workout;
+
+      try {
+        requiredConnection(connection);
+        await finishWorkoutSession(connection, active.workout.id);
+      } catch {
+        // Local state is the source of truth for the in-app flow.
+      }
+
+      return {
+        workout: finishedWorkout,
+        summary,
+        nextPlan,
+      };
     });
-  }, [activeWorkout, connection, runAction]);
+  }, [connection, elapsedSeconds, runAction]);
+
+  const completeActiveWorkoutLocal = useCallback(
+    (payload: { date: string; exercises: WorkoutExerciseState[]; performance: number }) => {
+      setError(null);
+
+      const snapshot = appStateRef.current;
+      const active = snapshot.currentWorkout;
+      if (!active) {
+        return;
+      }
+
+      const completedAt = payload.date;
+
+      const exercisesSummary = active.state.exercises.map((ex) => {
+        const sets = Array.isArray(ex.sets) ? ex.sets : [];
+        const topWeight = sets.reduce((max, s) => Math.max(max, Number(s.weight || 0)), 0);
+        const topReps = sets.reduce((max, s) => Math.max(max, Number(s.reps || 0)), 0);
+        return {
+          name: ex.name,
+          sets: sets.length,
+          topWeight,
+          topReps,
+        };
+      });
+
+      const totalSets = exercisesSummary.reduce((sum, e) => sum + e.sets, 0);
+      const completedSets = active.state.exercises.reduce(
+        (sum, ex) => sum + (ex.sets ? ex.sets.filter((s) => s.completed).length : 0),
+        0
+      );
+
+      const totalVolume = active.state.exercises.reduce(
+        (vol, ex) =>
+          vol +
+          (Array.isArray(ex.sets)
+            ? ex.sets.reduce((svol, s) => svol + (Number(s.weight || 0) * Number(s.reps || 0)), 0)
+            : 0),
+        0
+      );
+
+      const summary = {
+        id: `local-${Date.now()}`,
+        completedAt,
+        durationMinutes: Math.round(elapsedSeconds / 60),
+        totalVolume,
+        totalSets,
+        completedSets,
+        performance: payload.performance,
+        prs: 0,
+        splitKey: active.plan?.splitKey ?? 'full body',
+        feedback: null,
+        summaryLine: '',
+        exercises: exercisesSummary,
+      } as LastWorkoutSummary;
+
+      const nextHistory = trimWorkoutHistory([summary, ...snapshot.workoutHistory], snapshot.settings);
+      const nextPlannedWorkouts = generatePlannedWorkouts(snapshot.settings, summary, snapshot.settings.general.calendar_preview_days);
+
+      setAppState({
+        settings: snapshot.settings,
+        currentWorkout: null,
+        workoutHistory: nextHistory,
+        plannedWorkouts: nextPlannedWorkouts,
+      });
+
+      setElapsedSeconds(0);
+    },
+    [elapsedSeconds]
+  );
+
+  const resetActiveWorkout = useCallback(() => {
+    setError(null);
+    const snapshot = appStateRef.current;
+    // Clear current workout without saving any history
+    setAppState({
+      settings: snapshot.settings,
+      currentWorkout: null,
+      workoutHistory: snapshot.workoutHistory,
+      plannedWorkouts: snapshot.plannedWorkouts,
+    });
+    setElapsedSeconds(0);
+  }, []);
 
   const addExerciseToActiveWorkout = useCallback(
     async (payload: AddExercisePayload): Promise<void> => {
       await runAction(async () => {
-        let targetWorkout = activeWorkout;
-        if (!targetWorkout) {
-          const resumed = await startOrResumeWorkout();
-          targetWorkout = resumed;
-        }
+        const snapshot = appStateRef.current;
+        const baseCurrent =
+          snapshot.currentWorkout ??
+          createCurrentWorkoutFromPlan(
+            connection,
+            createEmptyWorkoutPlan()
+          );
+        const nextState = addExerciseToState(baseCurrent.state, baseCurrent.workout, payload);
+        const nextName = payload.exercise_name?.trim();
+        let nextCurrentWorkout = syncSessionExerciseNames({
+          ...baseCurrent,
+          state: nextState,
+          plan:
+            nextName
+              ? {
+                  ...baseCurrent.plan,
+                  exercises: [
+                    ...baseCurrent.plan.exercises,
+                    {
+                      name: nextName,
+                      muscleGroup: payload.muscle_group?.trim() || 'Custom',
+                      equipment: payload.equipment?.trim() || 'Mixed',
+                      targetSets: 3,
+                      targetReps: 10,
+                      targetWeightKg: 20,
+                      coachCue: 'Manual add. Start smooth, stay technical, and progress only if the reps stay clean.',
+                    },
+                  ],
+                }
+              : baseCurrent.plan,
+          session: {
+            ...baseCurrent.session,
+            minimized: false,
+            isActive: true,
+          },
+        });
 
-        await addExerciseToWorkout(connection, targetWorkout.id, payload);
-        await fetchWorkoutStateInternal(targetWorkout.id);
+        setAppState((current) => ({
+          ...current,
+          currentWorkout: nextCurrentWorkout,
+        }));
+
+        try {
+          requiredConnection(connection);
+          const remote = await addExerciseToWorkoutApi(connection, baseCurrent.workout.id, {
+            exercise_id: payload.exercise_id,
+            exercise_name: payload.exercise_name,
+          });
+
+          nextCurrentWorkout = syncSessionExerciseNames({
+            ...nextCurrentWorkout,
+            workout: remote.workout,
+            state: syncExerciseFromRemote(nextCurrentWorkout.state, remote.exercise),
+          });
+
+          setAppState((current) => ({
+            ...current,
+            currentWorkout: nextCurrentWorkout,
+          }));
+        } catch {
+          // Local-first add still succeeds when backend is unavailable.
+        }
       });
     },
-    [activeWorkout, connection, fetchWorkoutStateInternal, runAction, startOrResumeWorkout]
+    [connection, runAction]
   );
 
   const logSetForActiveWorkout = useCallback(
     async (payload: LogSetPayload): Promise<SetResponse> => {
       return runAction(async () => {
-        const workoutId = activeWorkout?.id;
-        if (!workoutId) {
+        const snapshot = appStateRef.current;
+        const active = snapshot.currentWorkout;
+        if (!active) {
           throw new Error('No active workout');
         }
 
-        const result = await logSet(connection, {
-          workout_id: workoutId,
-          ...payload,
+        const exercise = findTargetExercise(active.state, payload);
+        if (!exercise) {
+          throw new Error('Exercise not found');
+        }
+
+        const nextState = upsertSetInState(active.state, active.workout, exercise, payload);
+        const updatedExercise = nextState.exercises.find((item) => item.id === exercise.id) ?? exercise;
+        const feedback = buildSetFeedback(
+          exercise.name,
+          payload.weight,
+          payload.reps,
+          snapshot.workoutHistory[0] ?? null,
+          snapshot.workoutHistory
+        );
+        const suggestion = buildSetSuggestion({
+          exerciseName: exercise.name,
+          setNumber: updatedExercise.sets.length,
+          weight: payload.weight,
+          reps: payload.reps,
+          planExercise: findPlanExercise(active.plan, exercise.name),
+          totalWorkoutSets: countTotalSets(nextState),
         });
-        await fetchWorkoutStateInternal(workoutId);
-        return result;
+
+        let nextCurrentWorkout = syncSessionExerciseNames({
+          ...active,
+          state: nextState,
+          latestSetSuggestion: suggestion,
+        });
+
+        setAppState((current) => ({
+          ...current,
+          currentWorkout: nextCurrentWorkout,
+        }));
+
+        const set = updatedExercise.sets[updatedExercise.sets.length - 1];
+
+        try {
+          requiredConnection(connection);
+          const remote = await logSetApi(connection, {
+            workout_id: active.workout.id,
+            workout_exercise_id: payload.workout_exercise_id,
+            exercise_id: payload.exercise_id,
+            exercise_name: payload.exercise_name,
+            weight: payload.weight,
+            reps: payload.reps,
+            rpe: payload.rpe,
+            duration: payload.duration,
+            completed: payload.completed,
+          });
+
+          nextCurrentWorkout = syncSessionExerciseNames({
+            ...nextCurrentWorkout,
+            state: upsertLoggedSetInState(nextCurrentWorkout.state, remote),
+            latestSetSuggestion: remote.suggestion,
+          });
+
+          setAppState((current) => ({
+            ...current,
+            currentWorkout: nextCurrentWorkout,
+          }));
+
+          return remote;
+        } catch {
+          // Local state remains authoritative.
+        }
+
+        return {
+          set,
+          feedback,
+          suggestion,
+          exercise: {
+            id: exercise.id,
+            exercise_id: exercise.exercise_id,
+            name: exercise.name,
+          },
+          workout: active.workout,
+        };
       });
     },
-    [activeWorkout, connection, fetchWorkoutStateInternal, runAction]
+    [connection, runAction]
   );
 
   const patchSetLog = useCallback(
     async (setId: string, payload: SetPatchPayload): Promise<SetResponse> => {
       return runAction(async () => {
-        const result = await updateSet(connection, setId, payload);
-        if (activeWorkout) {
-          await fetchWorkoutStateInternal(activeWorkout.id);
+        const snapshot = appStateRef.current;
+        const active = snapshot.currentWorkout;
+        if (!active) {
+          throw new Error('No active workout');
         }
-        return result;
+
+        const nextState = patchSetInState(active.state, setId, payload);
+        if (!nextState) {
+          throw new Error('Set not found');
+        }
+
+        const exercise = nextState.exercises.find((item) => item.sets.some((setItem) => setItem.id === setId));
+        const set = exercise?.sets.find((setItem) => setItem.id === setId);
+
+        if (!exercise || !set) {
+          throw new Error('Set not found');
+        }
+
+        const feedback = buildSetFeedback(
+          exercise.name,
+          set.weight,
+          set.reps,
+          snapshot.workoutHistory[0] ?? null,
+          snapshot.workoutHistory
+        );
+        const suggestion = buildSetSuggestion({
+          exerciseName: exercise.name,
+          setNumber: exercise.sets.length,
+          weight: set.weight,
+          reps: set.reps,
+          planExercise: findPlanExercise(active.plan, exercise.name),
+          totalWorkoutSets: countTotalSets(nextState),
+        });
+
+        let nextCurrentWorkout = syncSessionExerciseNames({
+          ...active,
+          state: nextState,
+          latestSetSuggestion: suggestion,
+        });
+
+        setAppState((current) => ({
+          ...current,
+          currentWorkout: nextCurrentWorkout,
+        }));
+
+        try {
+          requiredConnection(connection);
+          const remote = await updateSetApi(connection, setId, payload);
+
+          nextCurrentWorkout = syncSessionExerciseNames({
+            ...nextCurrentWorkout,
+            state: upsertLoggedSetInState(nextCurrentWorkout.state, remote),
+            latestSetSuggestion: remote.suggestion,
+          });
+
+          setAppState((current) => ({
+            ...current,
+            currentWorkout: nextCurrentWorkout,
+          }));
+
+          return remote;
+        } catch {
+          // Local state remains authoritative.
+        }
+
+        return {
+          set,
+          feedback,
+          suggestion,
+          exercise: {
+            id: exercise.id,
+            exercise_id: exercise.exercise_id,
+            name: exercise.name,
+          },
+          workout: active.workout,
+        };
       });
     },
-    [activeWorkout, connection, fetchWorkoutStateInternal, runAction]
+    [connection, runAction]
   );
 
   const searchExerciseLibrary = useCallback(
@@ -422,14 +1533,18 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
             return internet;
           }
         } catch {
-          // Fall back to backend search when internet source fails.
+          // Fall back to the configured backend when the public library is unavailable.
         }
 
-        const result = await searchExercises(connection, query, muscleGroup, 30);
-        return result.exercises.map((item) => ({
-          ...item,
-          source: 'backend',
-        }));
+        try {
+          const result = await searchExercises(connection, query, muscleGroup, 30);
+          return result.exercises.map((item) => ({
+            ...item,
+            source: 'backend',
+          }));
+        } catch {
+          return [];
+        }
       });
     },
     [connection, runAction]
@@ -452,48 +1567,47 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     const bootstrap = async () => {
       setIsInitializing(true);
       try {
-        const raw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
-        const hydratedSession = raw ? parsePersistedSession(raw) : null;
+        const [persistedRaw, lastWorkoutRaw, workoutHistoryRaw, storedSettings] = await Promise.all([
+          AsyncStorage.getItem(SESSION_STORAGE_KEY),
+          AsyncStorage.getItem(LAST_WORKOUT_STORAGE_KEY),
+          AsyncStorage.getItem(WORKOUT_HISTORY_STORAGE_KEY),
+          loadUserAppSettings(),
+        ]);
 
-        if (!cancelled && hydratedSession) {
-          setSession(hydratedSession);
-          setElapsedSeconds(toElapsedSeconds(hydratedSession.startTime));
-          setActiveWorkout(toLocalWorkoutSession(connection, hydratedSession));
-          setWorkoutState(null);
+        const persistedCurrentWorkout = persistedRaw ? parsePersistedCurrentWorkout(persistedRaw) : null;
+        const lastSummary = lastWorkoutRaw ? parseLastWorkoutSummary(lastWorkoutRaw) : null;
+        const historyFromStorage = workoutHistoryRaw ? parseWorkoutHistory(workoutHistoryRaw) : [];
+        const initialHistory = trimWorkoutHistory(
+          [
+            ...historyFromStorage,
+            ...(lastSummary &&
+            !historyFromStorage.some(
+              (item) => item.id === lastSummary.id && item.completedAt === lastSummary.completedAt
+            )
+              ? [lastSummary]
+              : []),
+          ],
+          storedSettings
+        );
+        const latestSummary = initialHistory[0] ?? lastSummary;
+
+        if (cancelled) {
+          return;
         }
 
-        try {
-          requiredConnection(connection);
-          const active = await getActiveWorkout(connection, connection.userId);
-          if (cancelled) {
-            return;
-          }
+        setAppState((current) => ({
+          settings: storedSettings,
+          currentWorkout: current.currentWorkout ?? persistedCurrentWorkout,
+          workoutHistory: current.workoutHistory.length ? current.workoutHistory : initialHistory,
+          plannedWorkouts: generatePlannedWorkouts(
+            storedSettings,
+            (current.workoutHistory.length ? current.workoutHistory[0] : latestSummary) ?? null,
+            storedSettings.general.calendar_preview_days
+          ),
+        }));
 
-          if (!active.workout) {
-            if (!hydratedSession) {
-              setActiveWorkout(null);
-              setWorkoutState(null);
-              setSession(createInactiveSession());
-            }
-            return;
-          }
-
-          setActiveWorkout(active.workout);
-          const details = await fetchWorkoutStateInternal(active.workout.id);
-          if (cancelled) {
-            return;
-          }
-
-          setSession((current) => normalizeSessionFromWorkout(active.workout, details, current.minimized));
-        } catch (networkError: unknown) {
-          if (!cancelled && !hydratedSession) {
-            setSession(createInactiveSession());
-            setError(messageFromUnknown(networkError));
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setSession(createInactiveSession());
+        if (persistedCurrentWorkout) {
+          setElapsedSeconds(toElapsedSeconds(persistedCurrentWorkout.session.startTime));
         }
       } finally {
         if (!cancelled) {
@@ -507,107 +1621,132 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
     };
-  }, [connection, fetchWorkoutStateInternal]);
+  }, []);
 
   useEffect(() => {
-    if (!session.isActive) {
+    if (currentWorkout) {
+      return;
+    }
+
+    setAppState((current) => ({
+      ...current,
+      plannedWorkouts: generatePlannedWorkouts(current.settings, current.workoutHistory[0] ?? null, 14),
+    }));
+  }, [currentWorkout, settings, workoutHistory]);
+
+  useEffect(() => {
+    if (!currentWorkout) {
       setElapsedSeconds(0);
       return;
     }
 
-    setElapsedSeconds(toElapsedSeconds(session.startTime));
+    setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
     const timer = setInterval(() => {
-      setElapsedSeconds(toElapsedSeconds(session.startTime));
+      setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [session.isActive, session.startTime]);
+  }, [currentWorkout]);
 
   useEffect(() => {
-    if (!session.isActive) {
+    if (!currentWorkout) {
       void AsyncStorage.removeItem(SESSION_STORAGE_KEY).catch(() => undefined);
       return;
     }
 
-    const payload: PersistedWorkoutSessionState = {
-      id: session.id,
-      startTime: session.startTime,
-      exercises: session.exercises,
-      isActive: session.isActive,
-      minimized: session.minimized,
+    const payload: PersistedWorkoutState = {
+      currentWorkout,
     };
 
     void AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload)).catch(() => undefined);
-  }, [session]);
+  }, [currentWorkout]);
 
   useEffect(() => {
-    if (!activeWorkout && !workoutState) {
+    if (!workoutHistory.length) {
+      void Promise.all([
+        AsyncStorage.removeItem(WORKOUT_HISTORY_STORAGE_KEY),
+        AsyncStorage.removeItem(LAST_WORKOUT_STORAGE_KEY),
+      ]).catch(() => undefined);
       return;
     }
 
-    const nextSession = normalizeSessionFromWorkout(activeWorkout, workoutState, session.minimized);
-    setSession((current) => {
-      const sameExercises =
-        current.exercises.length === nextSession.exercises.length &&
-        current.exercises.every((value, index) => value === nextSession.exercises[index]);
-
-      if (
-        current.id === nextSession.id &&
-        current.startTime === nextSession.startTime &&
-        current.isActive === nextSession.isActive &&
-        current.minimized === nextSession.minimized &&
-        sameExercises
-      ) {
-        return current;
-      }
-
-      return nextSession;
-    });
-  }, [activeWorkout, workoutState, session.minimized]);
+    void Promise.all([
+      AsyncStorage.setItem(WORKOUT_HISTORY_STORAGE_KEY, JSON.stringify(workoutHistory)),
+      AsyncStorage.setItem(LAST_WORKOUT_STORAGE_KEY, JSON.stringify(workoutHistory[0])),
+    ]).catch(() => undefined);
+  }, [workoutHistory]);
 
   const minimizeWorkout = useCallback(() => {
-    setSession((current) => {
-      if (!current.isActive || current.minimized) {
+    setAppState((current) => {
+      if (!current.currentWorkout || current.currentWorkout.session.minimized) {
         return current;
       }
+
       return {
         ...current,
-        minimized: true,
+        currentWorkout: {
+          ...current.currentWorkout,
+          session: {
+            ...current.currentWorkout.session,
+            minimized: true,
+          },
+        },
       };
     });
   }, []);
 
   const restoreWorkout = useCallback(() => {
-    setSession((current) => {
-      if (!current.minimized) {
+    setAppState((current) => {
+      if (!current.currentWorkout || !current.currentWorkout.session.minimized) {
         return current;
       }
+
       return {
         ...current,
-        minimized: false,
+        currentWorkout: {
+          ...current.currentWorkout,
+          session: {
+            ...current.currentWorkout.session,
+            minimized: false,
+          },
+        },
       };
     });
   }, []);
 
   const value = useMemo<WorkoutFlowContextValue>(
     () => ({
+      appState,
       connection,
       setConnection,
+      settings,
+      updateSettings,
+      resetSettings,
       session,
       elapsedSeconds,
-      busy,
       isInitializing,
       error,
       clearError,
-      isWorkoutMinimized: session.minimized,
+      isWorkoutMinimized: Boolean(currentWorkout?.session.minimized),
       minimizeWorkout,
       restoreWorkout,
+      currentWorkout,
       activeWorkout,
       workoutState,
+      workoutPlan,
+      plannedWorkouts,
+      workoutHistory,
+      lastWorkoutSummary,
+      latestSetSuggestion,
       refreshActiveWorkout,
       refreshWorkoutState,
+      setCurrentWorkout,
+      completeActiveWorkoutLocal,
+      startEmptyWorkout,
       startOrResumeWorkout,
+      startPlannedWorkout,
       finishActiveWorkout,
+      resetActiveWorkout,
       addExerciseToActiveWorkout,
       logSetForActiveWorkout,
       patchSetLog,
@@ -615,27 +1754,40 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       loadExerciseProgress,
     }),
     [
-      connection,
-      setConnection,
-      session,
-      elapsedSeconds,
-      busy,
-      isInitializing,
-      error,
-      clearError,
-      minimizeWorkout,
-      restoreWorkout,
       activeWorkout,
-      workoutState,
+      addExerciseToActiveWorkout,
+      appState,
+      clearError,
+      connection,
+      currentWorkout,
+      elapsedSeconds,
+      error,
+      finishActiveWorkout,
+      isInitializing,
+      completeActiveWorkoutLocal,
+      lastWorkoutSummary,
+      latestSetSuggestion,
+      loadExerciseProgress,
+      logSetForActiveWorkout,
+      minimizeWorkout,
+      patchSetLog,
+      plannedWorkouts,
       refreshActiveWorkout,
       refreshWorkoutState,
-      startOrResumeWorkout,
-      finishActiveWorkout,
-      addExerciseToActiveWorkout,
-      logSetForActiveWorkout,
-      patchSetLog,
+      resetSettings,
+      setCurrentWorkout,
+      restoreWorkout,
       searchExerciseLibrary,
-      loadExerciseProgress,
+      session,
+      setConnection,
+      settings,
+      startEmptyWorkout,
+      startPlannedWorkout,
+      startOrResumeWorkout,
+      updateSettings,
+      workoutHistory,
+      workoutPlan,
+      workoutState,
     ]
   );
 

@@ -33,6 +33,11 @@ type WgerResponse = {
 const DEFAULT_BASE_URL = 'https://wger.de/api/v2';
 const EXERCISE_SEARCH_LIMIT = 80;
 const REQUEST_TIMEOUT_MS = 12000;
+const EXERCISE_PAGE_LIMIT = 200;
+const EXERCISE_CACHE_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+
+let cachedExerciseItems: ExerciseItem[] | null = null;
+let cachedAt = 0;
 
 function stripHtml(value: string): string {
   return value
@@ -107,11 +112,15 @@ async function requestWger(path: string): Promise<WgerResponse> {
       signal: controller.signal,
       headers: {
         Accept: 'application/json',
+          'User-Agent': 'vpulz-mobile/1.0',
       },
     });
 
     if (!response.ok) {
-      throw new Error(`Exercise library request failed (${response.status})`);
+      const text = await response.text().catch(() => '');
+      const msg = `Exercise library request failed (${response.status}) ${text}`;
+      console.warn(msg);
+      throw new Error(msg);
     }
 
     return (await response.json()) as WgerResponse;
@@ -120,16 +129,49 @@ async function requestWger(path: string): Promise<WgerResponse> {
   }
 }
 
+async function fetchAllWgerExerciseItems(): Promise<ExerciseItem[]> {
+  const now = Date.now();
+  if (cachedExerciseItems && now - cachedAt < EXERCISE_CACHE_TTL_MS) {
+    return cachedExerciseItems;
+  }
+
+  const allRows: WgerExercise[] = [];
+  let offset = 0;
+
+  while (true) {
+    try {
+      const resp = await requestWger(`/exerciseinfo/?language=2&limit=${EXERCISE_PAGE_LIMIT}&offset=${offset}`);
+      const rows = Array.isArray(resp.results) ? resp.results : [];
+      allRows.push(...rows);
+      if (!resp || !resp.results || rows.length === 0 || !((resp as any).next)) {
+        break;
+      }
+      offset += EXERCISE_PAGE_LIMIT;
+    } catch (e: unknown) {
+      console.warn('Failed to fetch WGER exercise page', e);
+      // surface the error to caller so UI can show retry/fallback
+      throw e;
+    }
+  }
+
+  const mapped: ExerciseItem[] = allRows
+    .map(toExerciseItem)
+    .filter((item): item is ExerciseItem => item !== null);
+
+  cachedExerciseItems = mapped;
+  cachedAt = Date.now();
+  return mapped;
+}
+
 export async function searchInternetExerciseLibrary(
   query?: string,
   muscleGroup?: string,
   limit = 30
 ): Promise<ExerciseItem[]> {
-  const response = await requestWger(`/exerciseinfo/?limit=${EXERCISE_SEARCH_LIMIT}`);
-  const mapped = (response.results ?? [])
-    .map(toExerciseItem)
-    .filter((item): item is ExerciseItem => item !== null)
-    .filter((item) => matchesFilters(item, query, muscleGroup));
-
-  return mapped.slice(0, Math.max(1, limit));
+  const all = await fetchAllWgerExerciseItems();
+  const filtered = all.filter((item) => matchesFilters(item, query, muscleGroup));
+  if (typeof limit === 'number' && limit > 0) {
+    return filtered.slice(0, Math.max(1, limit));
+  }
+  return filtered;
 }

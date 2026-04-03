@@ -4,10 +4,21 @@ export type ConnectionConfig = {
   userId: string;
 };
 
+
+export type SetType = 'normal' | 'warmup' | 'pr' | 'drop' | 'failure';
+
+// New: Note type for sets and exercises
+export type Note = {
+  text: string;
+  created_at: string;
+  updated_at?: string;
+};
+
 export type WorkoutStatus = 'active' | 'finished';
 
 export interface WorkoutSession {
   id: string;
+
   user_id: string;
   status: WorkoutStatus;
   start_time: string;
@@ -24,9 +35,11 @@ export interface LoggedSet {
   rpe: number;
   duration: number;
   completed: boolean;
+  set_type?: SetType;
   volume: number;
   created_at: string;
   updated_at: string;
+  note?: Note | null;
 }
 
 export interface WorkoutExerciseState {
@@ -115,6 +128,7 @@ export interface SetLogPayload {
   rpe: number;
   duration: number;
   completed: boolean;
+  set_type?: SetType;
   workout_exercise_id?: string;
   exercise_id?: number;
   exercise_name?: string;
