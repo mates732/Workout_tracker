@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { AppState as NativeAppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   addExerciseToWorkout as addExerciseToWorkoutApi,
@@ -96,15 +97,24 @@ export type CurrentWorkout = {
   latestSetSuggestion: SetSuggestion | null;
 };
 
+export type TimerState = {
+  elapsedSeconds: number;
+  isRunning: boolean;
+  isAppActive: boolean;
+  startedAt: string | null;
+};
+
 export type AppState = {
   settings: UserAppSettings;
   currentWorkout: CurrentWorkout | null;
   workoutHistory: LastWorkoutSummary[];
   plannedWorkouts: PlannedWorkout[];
+  selectedDate: string;
 };
 
 type PersistedWorkoutState = {
   currentWorkout: CurrentWorkout | null;
+  selectedDate?: string;
 };
 
 type LegacyPersistedWorkoutState = {
@@ -119,11 +129,16 @@ type WorkoutFlowContextValue = {
   appState: AppState;
   connection: ConnectionConfig;
   setConnection: (next: ConnectionConfig) => void;
+  selectedDate: string;
+  setSelectedDate: (next: string) => void;
   settings: UserAppSettings;
+  userProfile: UserAppSettings['profile'];
+  aiCoachSettings: UserAppSettings['ai_coach'];
   updateSettings: (updater: (current: UserAppSettings) => UserAppSettings) => void;
   resetSettings: () => void;
   session: WorkoutSessionState;
   elapsedSeconds: number;
+  timerState: TimerState;
   isInitializing: boolean;
   error: string | null;
   clearError: () => void;
@@ -134,6 +149,7 @@ type WorkoutFlowContextValue = {
   activeWorkout: WorkoutSession | null;
   workoutState: WorkoutState | null;
   workoutPlan: AdaptiveWorkoutPlan | null;
+  workouts: PlannedWorkout[];
   plannedWorkouts: PlannedWorkout[];
   workoutHistory: LastWorkoutSummary[];
   lastWorkoutSummary: LastWorkoutSummary | null;
@@ -167,6 +183,34 @@ const WorkoutFlowContext = createContext<WorkoutFlowContextValue | null>(null);
 const SESSION_STORAGE_KEY = 'vpulz.workout.session.v4';
 const LAST_WORKOUT_STORAGE_KEY = 'vpulz.workout.last-summary.v1';
 const WORKOUT_HISTORY_STORAGE_KEY = 'vpulz.workout.history.v1';
+const SELECTED_DATE_STORAGE_KEY = 'vpulz.workout.selected-date.v1';
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function toDateKey(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function normalizeDateKey(value: string | null | undefined): string {
+  if (!value || typeof value !== 'string') {
+    return toDateKey(new Date());
+  }
+
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    return trimmed;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return toDateKey(new Date());
+  }
+
+  return toDateKey(parsed);
+}
 
 function createSessionId(): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
@@ -229,6 +273,61 @@ function messageFromUnknown(error: unknown): string {
     return error.message;
   }
   return 'Unexpected error';
+}
+
+function roundToHalf(value: number): number {
+  return Math.round(value * 2) / 2;
+}
+
+function applyCoachSettingsToSuggestion(
+  suggestion: SetSuggestion,
+  settings: UserAppSettings,
+  currentWeight: number,
+  currentReps: number
+): SetSuggestion {
+  const coach = settings.ai_coach;
+
+  if (!coach.enabled) {
+    return {
+      ...suggestion,
+      next_weight_kg: currentWeight,
+      next_reps: currentReps,
+      action: 'hold',
+      trend: 'flat',
+      adjustments: ['Coach disabled. Logging only.'],
+    };
+  }
+
+  let next: SetSuggestion = {
+    ...suggestion,
+    adjustments: [...suggestion.adjustments],
+  };
+
+  if (!coach.auto_progression) {
+    next = {
+      ...next,
+      next_weight_kg: currentWeight,
+      next_reps: currentReps,
+      action: 'hold',
+      trend: 'flat',
+      adjustments: ['Progression disabled. Keep current load and repeat quality reps.'],
+    };
+  }
+
+  if (coach.fatigue_adjustment && next.action === 'reduce') {
+    next = {
+      ...next,
+      next_weight_kg: roundToHalf(Math.max(0, next.next_weight_kg * 0.97)),
+      adjustments: ['Fatigue adjustment enabled. Dropping load a little extra for cleaner execution.', ...next.adjustments],
+    };
+  }
+
+  const prefix = coach.style === 'strict' ? 'Strict:' : coach.style === 'neutral' ? 'Note:' : 'Coach:';
+
+  return {
+    ...next,
+    adjustments: next.adjustments.map((message, index) => (index === 0 ? `${prefix} ${message}` : message)),
+  };
 }
 
 function normalizeSessionFromWorkout(
@@ -850,6 +949,7 @@ function createDefaultAppState(): AppState {
       null,
       defaultUserAppSettings.general.calendar_preview_days
     ),
+    selectedDate: toDateKey(new Date()),
   };
 }
 
@@ -859,6 +959,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAppActive, setIsAppActive] = useState<boolean>(NativeAppState.currentState === 'active');
   const appStateRef = useRef(appState);
 
   useEffect(() => {
@@ -869,6 +970,9 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   const currentWorkout = appState.currentWorkout;
   const workoutHistory = appState.workoutHistory;
   const plannedWorkouts = appState.plannedWorkouts;
+  const selectedDate = appState.selectedDate;
+  const userProfile = settings.profile;
+  const aiCoachSettings = settings.ai_coach;
   const lastWorkoutSummary = workoutHistory[0] ?? null;
   const activeWorkout = currentWorkout?.workout ?? null;
   const workoutState = currentWorkout?.state ?? null;
@@ -886,42 +990,78 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     return currentWorkout?.session ?? createInactiveSession();
   }, [currentWorkout]);
 
-  // Timer lifecycle: start when a workout is active, stop/reset when cleared.
-  const timerRef = useRef<number | null>(null);
+  const setSelectedDate = useCallback((next: string) => {
+    const normalized = normalizeDateKey(next);
+    setAppState((current) => {
+      if (current.selectedDate === normalized) {
+        return current;
+      }
+
+      return {
+        ...current,
+        selectedDate: normalized,
+      };
+    });
+  }, []);
+
   useEffect(() => {
-    // Clear any existing timer
+    const subscription = NativeAppState.addEventListener('change', (nextState) => {
+      setIsAppActive(nextState === 'active');
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  // Timer lifecycle: runs only with active workout while app is foregrounded.
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
     if (timerRef.current != null) {
-      clearInterval(timerRef.current as unknown as number);
+      clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
     if (!currentWorkout) {
-      // no active workout — ensure timer reset
       setElapsedSeconds(0);
       return;
     }
 
-    // Initialize elapsed seconds from session start time then start interval
-    try {
-      setElapsedSeconds(() => toElapsedSeconds(currentWorkout.session.startTime));
-    } catch {
-      setElapsedSeconds(0);
+    if (!isAppActive) {
+      return;
     }
 
-    // Start per-second tick
     const id = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
     }, 1000);
+    timerRef.current = id;
 
-    // store id and ensure cleanup
-    timerRef.current = id as unknown as number;
     return () => {
       if (timerRef.current != null) {
-        clearInterval(timerRef.current as unknown as number);
+        clearInterval(timerRef.current);
         timerRef.current = null;
       }
     };
-  }, [currentWorkout?.session.startTime]);
+  }, [currentWorkout?.session.id, isAppActive]);
+
+  useEffect(() => {
+    if (!currentWorkout) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
+  }, [currentWorkout?.session.id]);
+
+  const timerState = useMemo<TimerState>(
+    () => ({
+      elapsedSeconds,
+      isRunning: Boolean(currentWorkout) && isAppActive,
+      isAppActive,
+      startedAt: currentWorkout?.session.startTime ?? null,
+    }),
+    [currentWorkout, elapsedSeconds, isAppActive]
+  );
 
   const setConnection = useCallback((next: ConnectionConfig) => {
     setConnectionState({
@@ -946,6 +1086,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           nextHistory[0] ?? null,
           nextSettings.general.calendar_preview_days
         ),
+        selectedDate: current.selectedDate,
       };
     });
   }, []);
@@ -960,6 +1101,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         current.workoutHistory[0] ?? null,
         defaultUserAppSettings.general.calendar_preview_days
       ),
+      selectedDate: current.selectedDate,
     }));
     void saveUserAppSettings(defaultUserAppSettings).catch(() => undefined);
   }, []);
@@ -1179,6 +1321,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         currentWorkout: null,
         workoutHistory: nextHistory,
         plannedWorkouts: nextPlannedWorkouts,
+        selectedDate: snapshot.selectedDate,
       });
       setElapsedSeconds(0);
 
@@ -1259,6 +1402,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         currentWorkout: null,
         workoutHistory: nextHistory,
         plannedWorkouts: nextPlannedWorkouts,
+        selectedDate: snapshot.selectedDate,
       });
 
       setElapsedSeconds(0);
@@ -1275,6 +1419,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       currentWorkout: null,
       workoutHistory: snapshot.workoutHistory,
       plannedWorkouts: snapshot.plannedWorkouts,
+      selectedDate: snapshot.selectedDate,
     });
     setElapsedSeconds(0);
   }, []);
@@ -1372,14 +1517,19 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           snapshot.workoutHistory[0] ?? null,
           snapshot.workoutHistory
         );
-        const suggestion = buildSetSuggestion({
-          exerciseName: exercise.name,
-          setNumber: updatedExercise.sets.length,
-          weight: payload.weight,
-          reps: payload.reps,
-          planExercise: findPlanExercise(active.plan, exercise.name),
-          totalWorkoutSets: countTotalSets(nextState),
-        });
+        const suggestion = applyCoachSettingsToSuggestion(
+          buildSetSuggestion({
+            exerciseName: exercise.name,
+            setNumber: updatedExercise.sets.length,
+            weight: payload.weight,
+            reps: payload.reps,
+            planExercise: findPlanExercise(active.plan, exercise.name),
+            totalWorkoutSets: countTotalSets(nextState),
+          }),
+          snapshot.settings,
+          payload.weight,
+          payload.reps
+        );
 
         let nextCurrentWorkout = syncSessionExerciseNames({
           ...active,
@@ -1408,10 +1558,17 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
             completed: payload.completed,
           });
 
+          const remoteSuggestion = applyCoachSettingsToSuggestion(
+            remote.suggestion,
+            snapshot.settings,
+            payload.weight,
+            payload.reps
+          );
+
           nextCurrentWorkout = syncSessionExerciseNames({
             ...nextCurrentWorkout,
             state: upsertLoggedSetInState(nextCurrentWorkout.state, remote),
-            latestSetSuggestion: remote.suggestion,
+            latestSetSuggestion: remoteSuggestion,
           });
 
           setAppState((current) => ({
@@ -1419,7 +1576,10 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
             currentWorkout: nextCurrentWorkout,
           }));
 
-          return remote;
+          return {
+            ...remote,
+            suggestion: remoteSuggestion,
+          };
         } catch {
           // Local state remains authoritative.
         }
@@ -1468,14 +1628,19 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           snapshot.workoutHistory[0] ?? null,
           snapshot.workoutHistory
         );
-        const suggestion = buildSetSuggestion({
-          exerciseName: exercise.name,
-          setNumber: exercise.sets.length,
-          weight: set.weight,
-          reps: set.reps,
-          planExercise: findPlanExercise(active.plan, exercise.name),
-          totalWorkoutSets: countTotalSets(nextState),
-        });
+        const suggestion = applyCoachSettingsToSuggestion(
+          buildSetSuggestion({
+            exerciseName: exercise.name,
+            setNumber: exercise.sets.length,
+            weight: set.weight,
+            reps: set.reps,
+            planExercise: findPlanExercise(active.plan, exercise.name),
+            totalWorkoutSets: countTotalSets(nextState),
+          }),
+          snapshot.settings,
+          set.weight,
+          set.reps
+        );
 
         let nextCurrentWorkout = syncSessionExerciseNames({
           ...active,
@@ -1492,10 +1657,17 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           requiredConnection(connection);
           const remote = await updateSetApi(connection, setId, payload);
 
+          const remoteSuggestion = applyCoachSettingsToSuggestion(
+            remote.suggestion,
+            snapshot.settings,
+            set.weight,
+            set.reps
+          );
+
           nextCurrentWorkout = syncSessionExerciseNames({
             ...nextCurrentWorkout,
             state: upsertLoggedSetInState(nextCurrentWorkout.state, remote),
-            latestSetSuggestion: remote.suggestion,
+            latestSetSuggestion: remoteSuggestion,
           });
 
           setAppState((current) => ({
@@ -1503,7 +1675,10 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
             currentWorkout: nextCurrentWorkout,
           }));
 
-          return remote;
+          return {
+            ...remote,
+            suggestion: remoteSuggestion,
+          };
         } catch {
           // Local state remains authoritative.
         }
@@ -1567,14 +1742,27 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     const bootstrap = async () => {
       setIsInitializing(true);
       try {
-        const [persistedRaw, lastWorkoutRaw, workoutHistoryRaw, storedSettings] = await Promise.all([
+        const [persistedRaw, lastWorkoutRaw, workoutHistoryRaw, selectedDateRaw, storedSettings] = await Promise.all([
           AsyncStorage.getItem(SESSION_STORAGE_KEY),
           AsyncStorage.getItem(LAST_WORKOUT_STORAGE_KEY),
           AsyncStorage.getItem(WORKOUT_HISTORY_STORAGE_KEY),
+          AsyncStorage.getItem(SELECTED_DATE_STORAGE_KEY),
           loadUserAppSettings(),
         ]);
 
         const persistedCurrentWorkout = persistedRaw ? parsePersistedCurrentWorkout(persistedRaw) : null;
+        let selectedDateFromSession: string | null = null;
+        if (persistedRaw) {
+          try {
+            const parsed = JSON.parse(persistedRaw) as { selectedDate?: unknown };
+            if (typeof parsed.selectedDate === 'string') {
+              selectedDateFromSession = normalizeDateKey(parsed.selectedDate);
+            }
+          } catch {
+            selectedDateFromSession = null;
+          }
+        }
+        const restoredSelectedDate = normalizeDateKey(selectedDateRaw ?? selectedDateFromSession);
         const lastSummary = lastWorkoutRaw ? parseLastWorkoutSummary(lastWorkoutRaw) : null;
         const historyFromStorage = workoutHistoryRaw ? parseWorkoutHistory(workoutHistoryRaw) : [];
         const initialHistory = trimWorkoutHistory(
@@ -1604,6 +1792,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
             (current.workoutHistory.length ? current.workoutHistory[0] : latestSummary) ?? null,
             storedSettings.general.calendar_preview_days
           ),
+          selectedDate: restoredSelectedDate,
         }));
 
         if (persistedCurrentWorkout) {
@@ -1636,30 +1825,21 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!currentWorkout) {
-      setElapsedSeconds(0);
-      return;
-    }
-
-    setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
-    const timer = setInterval(() => {
-      setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [currentWorkout]);
-
-  useEffect(() => {
-    if (!currentWorkout) {
       void AsyncStorage.removeItem(SESSION_STORAGE_KEY).catch(() => undefined);
       return;
     }
 
     const payload: PersistedWorkoutState = {
       currentWorkout,
+      selectedDate,
     };
 
     void AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload)).catch(() => undefined);
-  }, [currentWorkout]);
+  }, [currentWorkout, selectedDate]);
+
+  useEffect(() => {
+    void AsyncStorage.setItem(SELECTED_DATE_STORAGE_KEY, selectedDate).catch(() => undefined);
+  }, [selectedDate]);
 
   useEffect(() => {
     if (!workoutHistory.length) {
@@ -1719,11 +1899,16 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       appState,
       connection,
       setConnection,
+      selectedDate,
+      setSelectedDate,
       settings,
+      userProfile,
+      aiCoachSettings,
       updateSettings,
       resetSettings,
       session,
       elapsedSeconds,
+      timerState,
       isInitializing,
       error,
       clearError,
@@ -1734,6 +1919,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       activeWorkout,
       workoutState,
       workoutPlan,
+      workouts: plannedWorkouts,
       plannedWorkouts,
       workoutHistory,
       lastWorkoutSummary,
@@ -1764,6 +1950,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       error,
       finishActiveWorkout,
       isInitializing,
+      isAppActive,
       completeActiveWorkoutLocal,
       lastWorkoutSummary,
       latestSetSuggestion,
@@ -1775,12 +1962,17 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       refreshActiveWorkout,
       refreshWorkoutState,
       resetSettings,
+      selectedDate,
+      setSelectedDate,
       setCurrentWorkout,
       restoreWorkout,
       searchExerciseLibrary,
       session,
       setConnection,
       settings,
+      timerState,
+      userProfile,
+      aiCoachSettings,
       startEmptyWorkout,
       startPlannedWorkout,
       startOrResumeWorkout,

@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { StyleSheet, Animated, Dimensions, Easing } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModalProvider } from './src/shared/components/ui/BottomSheetAdapter';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import type { RootStackParamList } from './src/navigation/RootNavigator';
@@ -15,18 +16,20 @@ const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function AppShell() {
   return (
-    <NavigationContainer ref={navigationRef}>
-      <StatusBar style="light" />
-      <RootNavigator />
-      <MinimizedWorkoutBar
-        onPress={() => {
-          if (!navigationRef.isReady()) {
-            return;
-          }
-          navigationRef.navigate('ActiveWorkout');
-        }}
-      />
-    </NavigationContainer>
+    <BottomSheetModalProvider>
+      <NavigationContainer ref={navigationRef}>
+        <StatusBar style="light" />
+        <RootNavigator />
+        <MinimizedWorkoutBar
+          onPress={() => {
+            if (!navigationRef.isReady()) {
+              return;
+            }
+            navigationRef.navigate('ActiveWorkout');
+          }}
+        />
+      </NavigationContainer>
+    </BottomSheetModalProvider>
   );
 }
 

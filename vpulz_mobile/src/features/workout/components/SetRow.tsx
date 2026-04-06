@@ -15,8 +15,11 @@ import { colors, spacing, typography } from '../../../shared/theme/tokens';
 interface Props {
   index: number;
   type: SetType;
+  previousLabel?: string;
   completed: boolean;
   active?: boolean;
+  editable?: boolean;
+  toggleDisabled?: boolean;
   weight?: string;
   reps?: string;
   onChangeWeight: (v: string) => void;
@@ -36,8 +39,11 @@ function labelForType(type: SetType, index: number): string {
 const SetRow: React.FC<Props> = ({
   index,
   type,
+  previousLabel = '-',
   completed,
   active,
+  editable = true,
+  toggleDisabled = false,
   weight = '',
   reps = '',
   onChangeWeight,
@@ -85,7 +91,7 @@ const SetRow: React.FC<Props> = ({
   }, [completed, rowScale, checkScale, checkOpacity]);
 
   useEffect(() => {
-    if (!active || completed) {
+    if (!active || completed || !editable) {
       return;
     }
     const handle = setTimeout(() => {
@@ -108,30 +114,41 @@ const SetRow: React.FC<Props> = ({
         <Text style={[styles.typeText, type !== 'normal' ? styles.typeTextAccent : null]}>{label}</Text>
       </Pressable>
 
+      <View style={styles.previousCell}>
+        <Text numberOfLines={1} style={styles.previousText}>{previousLabel}</Text>
+      </View>
+
       <TextInput
         ref={weightRef}
         value={weight}
         onChangeText={onChangeWeight}
+        editable={editable}
         keyboardType="numeric"
         placeholder="kg"
         placeholderTextColor={colors.mutedText}
-        style={styles.input}
+        style={[styles.input, !editable ? styles.inputReadonly : null]}
       />
 
       <TextInput
         value={reps}
         onChangeText={onChangeReps}
+        editable={editable}
         keyboardType="numeric"
         placeholder="reps"
         placeholderTextColor={colors.mutedText}
-        style={styles.input}
+        style={[styles.input, !editable ? styles.inputReadonly : null]}
       />
 
       <Pressable
-        onPress={() => void onToggleComplete()}
+        onPress={() => {
+          if (!toggleDisabled) {
+            void onToggleComplete();
+          }
+        }}
         accessibilityRole="button"
+        disabled={toggleDisabled}
         accessibilityState={{ checked: completed }}
-        style={[styles.checkButton, completed ? styles.checkButtonCompleted : null]}
+        style={[styles.checkButton, completed ? styles.checkButtonCompleted : null, toggleDisabled ? styles.checkButtonDisabled : null]}
       >
         <Animated.View style={{ opacity: checkOpacity, transform: [{ scale: checkScale }] }}>
           <Text style={[styles.checkText, completed ? styles.checkTextCompleted : null]}>{completed ? '✓' : '○'}</Text>
@@ -161,7 +178,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(34,197,94,0.25)',
   },
   typeButton: {
-    width: 42,
+    width: 40,
     height: 42,
     borderRadius: 10,
     borderWidth: 1,
@@ -178,8 +195,18 @@ const styles = StyleSheet.create({
   typeTextAccent: {
     color: '#86EFAC',
   },
-  input: {
+  previousCell: {
     flex: 1,
+    minWidth: 78,
+    paddingHorizontal: spacing.xs,
+  },
+  previousText: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '600',
+  },
+  input: {
+    width: 66,
     minHeight: 42,
     borderWidth: 1,
     borderColor: colors.border,
@@ -189,9 +216,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     fontSize: typography.body,
     fontWeight: '600',
+    textAlign: 'center',
+  },
+  inputReadonly: {
+    color: colors.secondaryText,
+    backgroundColor: colors.surface,
   },
   checkButton: {
-    width: 42,
+    width: 36,
     height: 42,
     borderRadius: 10,
     borderWidth: 1,
@@ -203,6 +235,9 @@ const styles = StyleSheet.create({
   checkButtonCompleted: {
     backgroundColor: 'rgba(34,197,94,0.2)',
     borderColor: 'rgba(34,197,94,0.5)',
+  },
+  checkButtonDisabled: {
+    opacity: 0.45,
   },
   checkText: {
     color: colors.text,

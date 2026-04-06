@@ -1,181 +1,413 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { SafeAreaView, View, Text, TextInput, Pressable, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { AppButton } from '../../shared/components/ui';
 import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
 import { searchInternetExerciseLibrary } from '../../shared/api/exerciseLibraryApi';
 import type { ExerciseItem } from '../../shared/api/workoutApi';
-import { colors, typography } from '../../shared/theme/tokens';
+import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
 
-type RouteParams = {
-  autoOpenLogger?: boolean;
-};
+const CATEGORIES = ['All', 'Chest', 'Back', 'Legs', 'Shoulders', 'Arms', 'Core'] as const;
+
+const SAMPLE_FALLBACK: ExerciseItem[] = [
+  {
+    id: 1000001,
+    name: 'Back Squat',
+    muscle_group: 'Legs',
+    equipment: 'Barbell',
+    instructions: '',
+    image_url: null,
+    image_urls: [],
+    video_url: null,
+    video_urls: [],
+    source: 'internet',
+  },
+  {
+    id: 1000002,
+    name: 'Bench Press',
+    muscle_group: 'Chest',
+    equipment: 'Barbell',
+    instructions: '',
+    image_url: null,
+    image_urls: [],
+    video_url: null,
+    video_urls: [],
+    source: 'internet',
+  },
+  {
+    id: 1000003,
+    name: 'Romanian Deadlift',
+    muscle_group: 'Back',
+    equipment: 'Barbell',
+    instructions: '',
+    image_url: null,
+    image_urls: [],
+    video_url: null,
+    video_urls: [],
+    source: 'internet',
+  },
+  {
+    id: 1000004,
+    name: 'Overhead Press',
+    muscle_group: 'Shoulders',
+    equipment: 'Barbell',
+    instructions: '',
+    image_url: null,
+    image_urls: [],
+    video_url: null,
+    video_urls: [],
+    source: 'internet',
+  },
+  {
+    id: 1000005,
+    name: 'Pull-up',
+    muscle_group: 'Back',
+    equipment: 'Bodyweight',
+    instructions: '',
+    image_url: null,
+    image_urls: [],
+    video_url: null,
+    video_urls: [],
+    source: 'internet',
+  },
+];
+
+function normalizeCategory(category: string): string | undefined {
+  if (category === 'All') {
+    return undefined;
+  }
+
+  return category.toLowerCase();
+}
 
 export function AddExerciseScreen() {
   const navigation = useNavigation();
-  const route = useRoute();
-  const autoOpenLogger = Boolean((route.params as RouteParams | undefined)?.autoOpenLogger);
   const { addExerciseToActiveWorkout } = useWorkoutFlow();
 
   const [query, setQuery] = useState('');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>('All');
   const [items, setItems] = useState<ExerciseItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [selectedById, setSelectedById] = useState<Record<number, ExerciseItem>>({});
 
-  const loadResults = async (q: string) => {
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedItems = useMemo(() => Object.values(selectedById), [selectedById]);
+
+  const loadResults = async (nextQuery: string, nextCategory: string) => {
     setLoading(true);
     setError(null);
+
     try {
-      const results = await searchInternetExerciseLibrary(q, undefined, 60);
+      const results = await searchInternetExerciseLibrary(nextQuery, normalizeCategory(nextCategory), 80);
       setItems(results);
     } catch (e: unknown) {
-      // surface a helpful message and clear the results
-      const msg = e instanceof Error ? e.message : 'Failed to load exercise library';
-      setError(msg);
-      setItems([]);
+      const message = e instanceof Error ? e.message : 'Failed to load exercise library';
+      setError(message);
+      setItems(SAMPLE_FALLBACK);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // initial load
-    void loadResults('');
+    void loadResults('', category);
+
     return () => {
-      if (debounce.current) clearTimeout(debounce.current);
+      if (debounce.current) {
+        clearTimeout(debounce.current);
+      }
     };
   }, []);
 
   useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => {
-      void loadResults(query);
-    }, 220);
-    return () => {
-      if (debounce.current) clearTimeout(debounce.current);
-    };
-  }, [query]);
-
-  const onAddDirect = async (item: ExerciseItem) => {
-    try {
-      await addExerciseToActiveWorkout({ exercise_id: item.id, exercise_name: item.name });
-    } catch {
-      // ignore
+    if (debounce.current) {
+      clearTimeout(debounce.current);
     }
-    if (!autoOpenLogger && navigation.canGoBack()) navigation.goBack();
+
+    debounce.current = setTimeout(() => {
+      void loadResults(query, category);
+    }, 220);
+
+    return () => {
+      if (debounce.current) {
+        clearTimeout(debounce.current);
+      }
+    };
+  }, [query, category]);
+
+  const toggleSelect = (item: ExerciseItem) => {
+    setSelectedById((current) => {
+      const next = { ...current };
+      if (next[item.id]) {
+        delete next[item.id];
+        return next;
+      }
+
+      next[item.id] = item;
+      return next;
+    });
   };
 
-  const renderItem = ({ item }: { item: ExerciseItem }) => (
-    <Pressable style={styles.row} onPress={() => onAddDirect(item)}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.rowTitle}>{item.name}</Text>
-        <Text style={styles.rowMeta}>{item.muscle_group} • {item.equipment}</Text>
-      </View>
-      <Text style={styles.addHint}>Add</Text>
-    </Pressable>
-  );
+  const confirmSelection = async () => {
+    if (!selectedItems.length) {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      }
+      return;
+    }
 
-  const keyExtractor = (i: ExerciseItem) => String(i.id);
+    setSubmitting(true);
+    try {
+      for (const item of selectedItems) {
+        try {
+          await addExerciseToActiveWorkout({
+            exercise_id: item.id,
+            exercise_name: item.name,
+            muscle_group: item.muscle_group,
+            equipment: item.equipment,
+          });
+        } catch {
+          // Continue adding remaining selected exercises.
+        }
+      }
+    } finally {
+      setSubmitting(false);
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      }
+    }
+  };
+
+  const keyExtractor = (item: ExerciseItem) => String(item.id);
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
         <View style={styles.topRow}>
-          <Text style={styles.title}>LIBRARY</Text>
+          <Text style={styles.title}>Exercise Library</Text>
           <Pressable onPress={() => navigation.canGoBack() && navigation.goBack()}>
-            <Text style={styles.close}>FINISH</Text>
+            <Text style={styles.close}>Close</Text>
           </Pressable>
         </View>
 
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Search exercise"
-          placeholderTextColor="#767676"
+          placeholder="Search exercises"
+          placeholderTextColor={colors.mutedText}
           style={styles.input}
           returnKeyType="search"
         />
 
+        <ScrollView
+          horizontal
+          contentContainerStyle={styles.categoryRow}
+          showsHorizontalScrollIndicator={false}
+        >
+          {CATEGORIES.map((item) => {
+            const selected = category === item;
+            return (
+              <Pressable
+                key={item}
+                style={[styles.categoryChip, selected && styles.categoryChipSelected]}
+                onPress={() => setCategory(item)}
+              >
+                <Text style={[styles.categoryChipText, selected && styles.categoryChipTextSelected]}>{item}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
         {loading ? (
-          <View style={{ marginTop: 24 }}>
+          <View style={styles.stateWrap}>
             <ActivityIndicator size="small" color={colors.primary} />
-          </View>
-        ) : error ? (
-          <View style={{ marginTop: 24, alignItems: 'center' }}>
-            <Text style={{ color: '#D0A0A0', marginBottom: 12 }}>{`Error: ${error}`}</Text>
-            <Pressable style={[styles.row, { alignItems: 'center', justifyContent: 'center' }]} onPress={() => loadResults(query)}>
-              <Text style={{ color: colors.primary, fontWeight: '700' }}>Retry</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.row, { alignItems: 'center', justifyContent: 'center', marginTop: 10 }]}
-              onPress={() => {
-                // lightweight local fallback list
-                const fallback: ExerciseItem[] = [
-                  { id: 1000001, name: 'Back Squat', muscle_group: 'Legs', equipment: 'Barbell', instructions: '', image_url: null, image_urls: [], video_url: null, video_urls: [], source: 'internet' },
-                  { id: 1000002, name: 'Bench Press', muscle_group: 'Chest', equipment: 'Barbell', instructions: '', image_url: null, image_urls: [], video_url: null, video_urls: [], source: 'internet' },
-                  { id: 1000003, name: 'Deadlift', muscle_group: 'Back', equipment: 'Barbell', instructions: '', image_url: null, image_urls: [], video_url: null, video_urls: [], source: 'internet' },
-                  { id: 1000004, name: 'Overhead Press', muscle_group: 'Shoulders', equipment: 'Barbell', instructions: '', image_url: null, image_urls: [], video_url: null, video_urls: [], source: 'internet' },
-                  { id: 1000005, name: 'Pull-up', muscle_group: 'Back', equipment: 'Bodyweight', instructions: '', image_url: null, image_urls: [], video_url: null, video_urls: [], source: 'internet' },
-                ];
-                setItems(fallback);
-                setError(null);
-              }}
-            >
-              <Text style={{ color: colors.primary, fontWeight: '700' }}>Use sample exercises</Text>
-            </Pressable>
           </View>
         ) : (
           <FlatList
             data={items}
             keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            contentContainerStyle={styles.listContent}
+            renderItem={({ item }) => {
+              const selected = Boolean(selectedById[item.id]);
+              return (
+                <Pressable
+                  style={[styles.row, selected && styles.rowSelected]}
+                  onPress={() => toggleSelect(item)}
+                >
+                  <View style={styles.rowCopy}>
+                    <Text style={styles.rowTitle}>{item.name}</Text>
+                    <Text style={styles.rowMeta}>{`${item.muscle_group} • ${item.equipment}`}</Text>
+                  </View>
+                  <Text style={[styles.rowStatus, selected && styles.rowStatusSelected]}>
+                    {selected ? 'Selected' : 'Tap to select'}
+                  </Text>
+                </Pressable>
+              );
+            }}
             keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.listContent}
             ListEmptyComponent={() => (
-              <View style={styles.empty}><Text style={styles.emptyText}>No exercises found</Text></View>
+              <View style={styles.stateWrap}>
+                <Text style={styles.emptyText}>No exercises found.</Text>
+              </View>
             )}
           />
         )}
+
+        {error ? <Text style={styles.errorText}>{`Library fallback active: ${error}`}</Text> : null}
+
+        <View style={styles.footer}>
+          <Text style={styles.selectionText}>{`${selectedItems.length} selected`}</Text>
+          <AppButton onPress={confirmSelection} disabled={submitting}>
+            {submitting ? 'Adding...' : `Add Selected${selectedItems.length ? ` (${selectedItems.length})` : ''}`}
+          </AppButton>
+        </View>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  container: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  title: { color: colors.text, fontSize: typography.title, fontWeight: '800' },
-  close: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  container: {
+    flex: 1,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.xs,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  title: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '800',
+  },
+  close: {
+    color: colors.primary,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
   input: {
     minHeight: 46,
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: '#2B2B2B',
-    backgroundColor: '#1B1B1B',
-    color: '#FFFFFF',
-    fontSize: 14,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    color: colors.text,
+    fontSize: typography.caption,
     fontWeight: '600',
-    paddingHorizontal: 12,
+    paddingHorizontal: spacing.sm,
   },
-  listContent: { paddingVertical: 12, paddingBottom: 120 },
+  categoryRow: {
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  categoryChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  categoryChipSelected: {
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(10,132,255,0.16)',
+  },
+  categoryChipText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '600',
+  },
+  categoryChipTextSelected: {
+    color: colors.primary,
+  },
+  listContent: {
+    paddingBottom: 120,
+  },
   row: {
-    minHeight: 56,
+    minHeight: 62,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#2A2A2A',
-    borderRadius: 10,
-    backgroundColor: '#1F1F1F',
-    paddingHorizontal: 12,
-    marginBottom: 10,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
   },
-  rowTitle: { color: '#F3F3F3', fontSize: 15, fontWeight: '700' },
-  rowMeta: { color: '#9A9A9A', fontSize: 11, marginTop: 2 },
-  addHint: { color: colors.primary, fontWeight: '800' },
-  empty: { paddingTop: 40, alignItems: 'center' },
-  emptyText: { color: '#9A9A9A' },
+  rowSelected: {
+    borderColor: colors.accent,
+    backgroundColor: 'rgba(52,199,89,0.16)',
+  },
+  rowCopy: {
+    flex: 1,
+  },
+  rowTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: '700',
+  },
+  rowMeta: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    marginTop: 2,
+  },
+  rowStatus: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+  },
+  rowStatusSelected: {
+    color: colors.accent,
+  },
+  stateWrap: {
+    paddingTop: spacing.lg,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+  },
+  errorText: {
+    color: '#D7B9B5',
+    fontSize: typography.tiny,
+    marginBottom: spacing.xs,
+  },
+  footer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: spacing.md,
+    gap: spacing.xs,
+    backgroundColor: colors.background,
+    paddingTop: spacing.xs,
+  },
+  selectionText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '600',
+  },
 });
 
 export default AddExerciseScreen;

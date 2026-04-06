@@ -69,21 +69,43 @@ export const ExerciseCard: React.FC<Props> = ({
 
         <Text style={styles.lastText}>{`Last: ${lastCompleted?.weight ?? '-'} x ${lastCompleted?.reps ?? '-'}`}</Text>
 
+        <View style={styles.tableHeader}>
+          <Text style={[styles.tableHeaderText, styles.colSet]}>SET</Text>
+          <Text style={[styles.tableHeaderText, styles.colPrevious]}>PREVIOUS</Text>
+          <Text style={[styles.tableHeaderText, styles.colMetric]}>KG</Text>
+          <Text style={[styles.tableHeaderText, styles.colMetric]}>REPS</Text>
+          <Text style={[styles.tableHeaderText, styles.colDone]}>✔</Text>
+        </View>
+
         <View style={styles.setsList}>
           {Array.from({ length: rowCount }).map((_, rowIndex) => {
             const setItem = exercise.sets[rowIndex];
+            const previousSet = rowIndex > 0 ? exercise.sets[rowIndex - 1] : null;
+            const previousLabel = previousSet ? `${previousSet.weight} x ${previousSet.reps}` : '-';
+            const isActiveRow = rowIndex === activeRow;
             return (
               <SetRow
                 key={`${exercise.id}-row-${rowIndex}`}
                 index={rowIndex + 1}
+                previousLabel={previousLabel}
                 type={getSetType(rowIndex)}
                 completed={Boolean(setItem?.completed)}
-                active={rowIndex === activeRow}
-                weight={draft.weight}
-                reps={draft.reps}
-                onChangeWeight={(value) => onChangeDraft('weight', value)}
-                onChangeReps={(value) => onChangeDraft('reps', value)}
+                active={isActiveRow}
+                editable={isActiveRow}
+                weight={isActiveRow ? draft.weight : setItem ? String(setItem.weight) : ''}
+                reps={isActiveRow ? draft.reps : setItem ? String(setItem.reps) : ''}
+                onChangeWeight={(value) => {
+                  if (isActiveRow) {
+                    onChangeDraft('weight', value);
+                  }
+                }}
+                onChangeReps={(value) => {
+                  if (isActiveRow) {
+                    onChangeDraft('reps', value);
+                  }
+                }}
                 onPressType={() => onPressSetType(rowIndex)}
+                toggleDisabled={!setItem && !isActiveRow}
                 onToggleComplete={() => onToggleSet(rowIndex)}
               />
             );
@@ -138,6 +160,33 @@ const styles = StyleSheet.create({
   lastText: {
     color: colors.mutedText,
     fontSize: typography.tiny,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  tableHeaderText: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  colSet: {
+    width: 40,
+  },
+  colPrevious: {
+    flex: 1,
+    minWidth: 78,
+  },
+  colMetric: {
+    width: 66,
+    textAlign: 'center',
+  },
+  colDone: {
+    width: 36,
+    textAlign: 'center',
   },
   setsList: {
     marginTop: spacing.xs,

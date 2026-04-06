@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppState as NativeAppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -17,19 +17,6 @@ type DraftSet = {
   weight: string;
   reps: string;
 };
-
-type ExerciseLibraryItem = {
-  id?: number;
-  name: string;
-};
-
-const FALLBACK_EXERCISES: ExerciseLibraryItem[] = [
-  { id: -1, name: 'Bench Press' },
-  { id: -2, name: 'Incline DB Press' },
-  { id: -3, name: 'Squat' },
-  { id: -4, name: 'Deadlift' },
-  { id: -5, name: 'Pull Up' },
-];
 
 const SET_TYPE_OPTIONS: Array<{ value: SetType; label: string }> = [
   { value: 'normal', label: 'Normal' },
@@ -56,6 +43,17 @@ function parsePositiveInt(value: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function computeActiveRow(exercise: WorkoutExerciseState, rowCount: number): number {
+  for (let index = 0; index < rowCount; index += 1) {
+    const setItem = exercise.sets[index];
+    if (!setItem || !setItem.completed) {
+      return index;
+    }
+  }
+
+  return Math.max(0, rowCount - 1);
+}
+
 export function WorkoutScreen() {
   const navigation = useNavigation<WorkoutNavigationProp>();
   const insets = useSafeAreaInsets();
@@ -63,14 +61,17 @@ export function WorkoutScreen() {
   const {
     currentWorkout,
     elapsedSeconds,
+    timerState,
+    latestSetSuggestion,
+    aiCoachSettings,
     error,
     clearError,
     startEmptyWorkout,
+    finishActiveWorkout,
+    resetActiveWorkout,
     completeActiveWorkoutLocal,
-    addExerciseToActiveWorkout,
     logSetForActiveWorkout,
     patchSetLog,
-    searchExerciseLibrary,
     minimizeWorkout,
     workoutHistory,
   } = useWorkoutFlow();
@@ -78,11 +79,6 @@ export function WorkoutScreen() {
   const [draftsByExercise, setDraftsByExercise] = useState<Record<string, DraftSet>>({});
   const [rowCountByExercise, setRowCountByExercise] = useState<Record<string, number>>({});
   const [setTypesByExercise, setSetTypesByExercise] = useState<Record<string, Record<number, SetType>>>({});
-
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [exerciseQuery, setExerciseQuery] = useState('');
-  const [libraryResults, setLibraryResults] = useState<ExerciseLibraryItem[]>([]);
-  const [remoteFailed, setRemoteFailed] = useState(false);
 
   const [selectedExerciseName, setSelectedExerciseName] = useState<string | null>(null);
   const [setTypePicker, setSetTypePicker] = useState<{ exerciseId: string; rowIndex: number } | null>(null);
@@ -119,6 +115,26 @@ export function WorkoutScreen() {
 
   const progress = Math.min(1, completedSets / Math.max(1, totalRows));
 
+  const totalVolume = useMemo(
+    () =>
+      exercises.reduce(
+        (sum, exercise) =>
+          sum +
+          exercise.sets
+            .filter((setItem) => setItem.completed)
+            .reduce((setSum, setItem) => setSum + setItem.weight * setItem.reps, 0),
+        0
+      ),
+    [exercises]
+  );
+
+  const coachTitle =
+    aiCoachSettings.style === 'strict'
+      ? 'Strict Coach'
+      : aiCoachSettings.style === 'neutral'
+      ? 'Coach Note'
+      : 'Motivation Boost';
+
   const startRestTimer = useCallback((seconds: number) => {
     setRestDurationSec(seconds);
     setRestRemainingSec(seconds);
@@ -141,6 +157,18 @@ export function WorkoutScreen() {
 
     return () => clearTimeout(timer);
   }, [restRemainingSec, restRunning]);
+
+  useEffect(() => {
+    const subscription = NativeAppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') {
+        setRestRunning(false);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (currentWorkout) {
@@ -257,13 +285,29 @@ export function WorkoutScreen() {
   const toggleOrAddSet = useCallback(
     async (exercise: WorkoutExerciseState, rowIndex: number) => {
       const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
-      const weight = parsePositiveFloat(draft.weight);
-      const reps = parsePositiveInt(draft.reps);
-      if (reps <= 0) {
+      const draftWeight = parsePositiveFloat(draft.weight);
+      const draftReps = parsePositiveInt(draft.reps);
+      const rowCount = rowCountByExercise[exercise.id] ?? getPlannedSets(exercise);
+      const activeRowIndex = computeActiveRow(exercise, rowCount);
+      const existing = exercise.sets[rowIndex];
+
+      let weight = draftWeight;
+      let reps = draftReps;
+
+      if (existing && rowIndex !== activeRowIndex) {
+        weight = existing.weight;
+        reps = existing.reps;
+      }
+
+      if (existing && reps <= 0) {
+        weight = existing.weight;
+        reps = existing.reps;
+      }
+
+      if (!existing && reps <= 0) {
         return;
       }
 
-      const existing = exercise.sets[rowIndex];
       if (existing) {
         const willComplete = !existing.completed;
         const result = await patchSetLog(existing.id, {
@@ -274,13 +318,15 @@ export function WorkoutScreen() {
 
         if (willComplete) {
           startRestTimer(restDurationSec);
-          setDraftsByExercise((current) => ({
-            ...current,
-            [exercise.id]: {
-              weight: String(result.suggestion.next_weight_kg),
-              reps: String(result.suggestion.next_reps),
-            },
-          }));
+          if (rowIndex === activeRowIndex) {
+            setDraftsByExercise((current) => ({
+              ...current,
+              [exercise.id]: {
+                weight: String(result.suggestion.next_weight_kg),
+                reps: String(result.suggestion.next_reps),
+              },
+            }));
+          }
         }
 
         return;
@@ -311,63 +357,37 @@ export function WorkoutScreen() {
         [exercise.id]: Math.max(current[exercise.id] ?? 1, exercise.sets.length + 1),
       }));
     },
-    [draftsByExercise, getSetType, logSetForActiveWorkout, patchSetLog, restDurationSec, startRestTimer]
+    [
+      draftsByExercise,
+      getPlannedSets,
+      getSetType,
+      logSetForActiveWorkout,
+      patchSetLog,
+      restDurationSec,
+      rowCountByExercise,
+      startRestTimer,
+    ]
   );
 
   const openExerciseLibrary = useCallback(() => {
-    setLibraryOpen(true);
-  }, []);
+    (navigation as any).navigate('ExerciseLibrary');
+  }, [navigation]);
 
-  useEffect(() => {
-    if (!libraryOpen) {
-      return;
-    }
-
-    let cancelled = false;
-    const handle = setTimeout(() => {
-      void searchExerciseLibrary(exerciseQuery, undefined)
-        .then((results) => {
-          if (cancelled) {
-            return;
-          }
-          setLibraryResults(
-            results.map((item) => ({
-              id: item.id,
-              name: item.name,
-            }))
-          );
-          setRemoteFailed(false);
-        })
-        .catch(() => {
-          if (cancelled) {
-            return;
-          }
-          setLibraryResults([]);
-          setRemoteFailed(true);
-        });
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(handle);
-    };
-  }, [exerciseQuery, libraryOpen, searchExerciseLibrary]);
-
-  const addExerciseAndClose = useCallback(
-    (exercise: ExerciseLibraryItem) => {
-      setLibraryOpen(false);
-      setExerciseQuery('');
-      setLibraryResults([]);
-      setRemoteFailed(false);
-      void addExerciseToActiveWorkout({ exercise_id: exercise.id, exercise_name: exercise.name }).catch(() => undefined);
-    },
-    [addExerciseToActiveWorkout]
-  );
-
-  const finishWorkout = useCallback(() => {
+  const finishWorkout = useCallback(async () => {
     const active = currentWorkout;
     if (!active) {
       return;
+    }
+
+    try {
+      const result = await finishActiveWorkout();
+      (navigation as any).navigate('WorkoutSummary', {
+        summary: result.summary,
+        nextPlan: result.nextPlan,
+      });
+      return;
+    } catch {
+      // Fall back to local completion for uninterrupted user flow.
     }
 
     const completed = active.state.exercises.reduce(
@@ -383,7 +403,12 @@ export function WorkoutScreen() {
     });
 
     (navigation as any).navigate('MainTabs', { screen: 'Home' });
-  }, [completeActiveWorkoutLocal, currentWorkout, navigation]);
+  }, [completeActiveWorkoutLocal, currentWorkout, finishActiveWorkout, navigation]);
+
+  const onExitWorkout = useCallback(() => {
+    resetActiveWorkout();
+    (navigation as any).navigate('MainTabs', { screen: 'Home' });
+  }, [navigation, resetActiveWorkout]);
 
   const onMinimize = useCallback(() => {
     minimizeWorkout();
@@ -439,6 +464,16 @@ export function WorkoutScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
       <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
+        <View style={styles.actionHeader}>
+          <AppButton variant="secondary" style={styles.actionHeaderButton} onPress={onExitWorkout}>
+            Back
+          </AppButton>
+          <Text style={styles.actionHeaderTitle}>Log Workout</Text>
+          <AppButton style={styles.actionHeaderButton} onPress={finishWorkout}>
+            Finish
+          </AppButton>
+        </View>
+
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>{currentWorkout?.plan.title ?? 'New Workout'}</Text>
@@ -452,13 +487,41 @@ export function WorkoutScreen() {
             >
               <Text style={styles.timerPillText}>{`⏱ ${formatDuration(restRunning ? restRemainingSec : restDurationSec)}`}</Text>
             </Pressable>
-            <Text style={styles.elapsedText}>{formatDuration(elapsedSeconds)}</Text>
+            <Text style={styles.elapsedText}>{timerState.isRunning ? 'Live' : 'Paused'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.mainTimerWrap}>
+          <Text style={styles.mainTimerLabel}>Main Timer</Text>
+          <Text style={styles.mainTimerValue}>{formatDuration(elapsedSeconds)}</Text>
+        </View>
+
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Duration</Text>
+            <Text style={styles.statValue}>{formatDuration(elapsedSeconds)}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Volume</Text>
+            <Text style={styles.statValue}>{`${Math.round(totalVolume)}kg`}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Sets</Text>
+            <Text style={styles.statValue}>{String(completedSets)}</Text>
           </View>
         </View>
 
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${Math.max(2, Math.round(progress * 100))}%` }]} />
         </View>
+
+        {aiCoachSettings.enabled && latestSetSuggestion ? (
+          <AppCard style={styles.aiCard}>
+            <Text style={styles.aiTitle}>{coachTitle}</Text>
+            <Text style={styles.aiBody}>{latestSetSuggestion.adjustments[0] ?? 'Keep form clean and stay consistent.'}</Text>
+            <Text style={styles.aiMeta}>{`Next: ${latestSetSuggestion.next_weight_kg}kg x ${latestSetSuggestion.next_reps} reps`}</Text>
+          </AppCard>
+        ) : null}
 
         {error ? (
           <AppCard style={styles.errorCard}>
@@ -512,9 +575,6 @@ export function WorkoutScreen() {
             </AppButton>
             <AppButton variant="secondary" style={styles.footerButton} onPress={onMinimize}>
               Minimize
-            </AppButton>
-            <AppButton style={styles.finishButton} onPress={finishWorkout}>
-              Finish
             </AppButton>
           </View>
         </StickyActionBar>
@@ -603,45 +663,6 @@ export function WorkoutScreen() {
           </View>
         </View>
       </Modal>
-
-      <Modal visible={libraryOpen} animationType="slide" transparent onRequestClose={() => setLibraryOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Add Exercise</Text>
-            <AppInput
-              value={exerciseQuery}
-              onChangeText={setExerciseQuery}
-              placeholder="Search exercises"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {remoteFailed ? <Text style={styles.modalMeta}>Could not load from WGER. Showing fallback list.</Text> : null}
-            <FlatList
-              data={libraryResults.length ? libraryResults : FALLBACK_EXERCISES}
-              keyExtractor={(item) => String(item.id ?? item.name)}
-              keyboardShouldPersistTaps="handled"
-              style={styles.libraryList}
-              renderItem={({ item }) => (
-                <AppCard style={styles.libraryCard}>
-                  <View style={styles.libraryRow}>
-                    <View style={styles.exerciseCopy}>
-                      <Text style={styles.exerciseTitle}>{item.name}</Text>
-                    </View>
-                    <AppButton variant="secondary" onPress={() => addExerciseAndClose(item)}>
-                      Add
-                    </AppButton>
-                  </View>
-                </AppCard>
-              )}
-            />
-            <View style={styles.footerActionsPlain}>
-              <AppButton variant="secondary" style={styles.footerButton} onPress={() => setLibraryOpen(false)}>
-                Done
-              </AppButton>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -653,6 +674,25 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
+  },
+  actionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  actionHeaderButton: {
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+  },
+  actionHeaderTitle: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: '700',
+    flex: 1,
+    textAlign: 'center',
   },
   header: {
     flexDirection: 'row',
@@ -700,6 +740,55 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: typography.caption,
   },
+  mainTimerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 18,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  mainTimerLabel: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  mainTimerValue: {
+    color: colors.text,
+    fontSize: 44,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  statCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    gap: 2,
+  },
+  statLabel: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  statValue: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: '700',
+  },
   progressTrack: {
     height: 8,
     borderRadius: 999,
@@ -739,20 +828,32 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     lineHeight: 18,
   },
+  aiCard: {
+    marginBottom: spacing.sm,
+    borderColor: 'rgba(52,199,89,0.4)',
+    backgroundColor: 'rgba(52,199,89,0.1)',
+  },
+  aiTitle: {
+    color: colors.text,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
+  aiBody: {
+    color: colors.text,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  aiMeta: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+  },
   footerActions: {
     flexDirection: 'row',
     gap: spacing.xs,
   },
-  footerActionsPlain: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
   footerButton: {
     flex: 1,
-  },
-  finishButton: {
-    flex: 1.2,
-    minHeight: 48,
   },
   modalOverlay: {
     flex: 1,
@@ -783,11 +884,6 @@ const styles = StyleSheet.create({
     fontSize: typography.subtitle,
     fontWeight: '700',
   },
-  modalMeta: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    lineHeight: 18,
-  },
   smallCloseButton: {
     minHeight: 36,
     paddingHorizontal: 10,
@@ -802,25 +898,5 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: typography.body,
     lineHeight: 20,
-  },
-  libraryList: {
-    maxHeight: 320,
-  },
-  libraryCard: {
-    padding: spacing.sm,
-  },
-  libraryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  exerciseCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  exerciseTitle: {
-    color: colors.text,
-    fontSize: typography.body,
-    fontWeight: '700',
   },
 });

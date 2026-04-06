@@ -1220,11 +1220,13 @@ export function generateWorkout(
   const lastWorkout = options.lastWorkout ?? history[0] ?? null;
   const splitKey =
     options.splitKeyOverride ?? (splitType ? toPlannedSplitKey(splitType) : pickNextSplit(settings, lastWorkout));
-  const progressionLabel = getProgressionLabel(lastWorkout);
+  const adaptiveEnabled = settings.ai_coach.enabled && settings.ai_coach.adaptive_training;
+  const progressionEnabled = settings.ai_coach.enabled && settings.ai_coach.auto_progression;
+  const progressionLabel = adaptiveEnabled ? getProgressionLabel(lastWorkout) : 'hold';
   const exerciseCount = getPlanExerciseCount(settings, splitKey);
   const levelMultiplier = LEVEL_MULTIPLIER[settings.profile.level];
   const repAdjustment = GOAL_REP_ADJUSTMENT[settings.profile.goal];
-  const multiplier = applyProgression(lastWorkout);
+  const multiplier = progressionEnabled ? applyProgression(lastWorkout) : 1;
   const lastPerformance = lastWorkout ? getPerformance(lastWorkout) : 1;
 
   const exercises = getExerciseLibraryForEquipment(splitKey, settings.workout.equipment)
@@ -1382,7 +1384,21 @@ export function generatePostWorkoutFeedback(workoutData: WorkoutSummaryInput, se
     return null;
   }
 
-  return generateFeedback(workoutData.performance);
+  const base = generateFeedback(workoutData.performance);
+
+  if (!settings.ai_coach.enabled) {
+    return base;
+  }
+
+  if (settings.ai_coach.style === 'strict') {
+    return `Performance ${workoutData.performance.toFixed(2)}. ${base} Stay disciplined and hit every target rep next session.`;
+  }
+
+  if (settings.ai_coach.style === 'neutral') {
+    return `Session complete. Score ${workoutData.performance.toFixed(2)}. ${base}`;
+  }
+
+  return `Great effort today. ${base} You logged ${workoutData.totalSets} planned sets and ${workoutData.prs} PRs.`;
 }
 
 export function shouldSendWorkoutReminder(today: string, settings: UserAppSettings): boolean {

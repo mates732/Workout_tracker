@@ -1,13 +1,15 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { MainTabs } from './MainTabs';
+import type { MainTabsParamList } from './MainTabs';
 import ActiveWorkoutScreen from '../features/workout/ActiveWorkoutScreen';
+import { ExerciseLibraryScreen } from '../features/workout/ExerciseLibraryScreen';
 import { WorkoutSummaryScreen } from '../features/workout/WorkoutSummaryScreen';
 import { CalendarScreen } from '../features/calendar/CalendarScreen';
 import type { AdaptiveWorkoutPlan, LastWorkoutSummary } from '../shared/state/settingsLogic';
 
 export type RootStackParamList = {
-  MainTabs: undefined;
-  ActiveWorkout: undefined;
+  MainTabs: { screen?: keyof MainTabsParamList } | undefined;
+  ActiveWorkout: { workoutId?: string } | undefined;
   ExerciseLibrary: undefined;
   PreviewDemo: undefined;
   Calendar: undefined;
@@ -23,7 +25,7 @@ export function RootNavigator() {
   return (
     <Stack.Navigator id={undefined} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="MainTabs" component={MainTabs} />
-      <Stack.Screen name="ExerciseLibrary" component={require('../features/workout/ExerciseLibraryScreen').ExerciseLibraryScreen} />
+      <Stack.Screen name="ExerciseLibrary" component={ExerciseLibraryScreen} options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="PreviewDemo" component={require('../features/training/WorkoutPreviewDemoScreen').WorkoutPreviewDemoScreen} options={{ animation: 'slide_from_bottom' }} />
       <Stack.Screen
         name="ActiveWorkout"

@@ -1,242 +1,239 @@
-import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../navigation/RootNavigator';
+import { AppButton, AppCard } from '../../shared/components/ui';
+import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
+import { colors, radius, shadows, spacing, typography } from '../../shared/theme/tokens';
 
-type ExerciseSet = {
-  id: number;
-  weight: number;
-  reps: number;
-  completed: boolean;
-  type: 'normal';
-};
+type TrainingNavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-type ExerciseItem = {
-  id: number;
-  name: string;
-  sets: ExerciseSet[];
-};
+function formatDate(value: string): string {
+  const dateOnlyMatch = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const year = Number.parseInt(dateOnlyMatch[1], 10);
+    const month = Number.parseInt(dateOnlyMatch[2], 10);
+    const day = Number.parseInt(dateOnlyMatch[3], 10);
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 export function TrainingScreen() {
-  const [exercises, setExercises] = useState<ExerciseItem[]>([]);
+  const navigation = useNavigation<TrainingNavigationProp>();
+  const insets = useSafeAreaInsets();
+  const {
+    currentWorkout,
+    plannedWorkouts,
+    workoutHistory,
+    startEmptyWorkout,
+    startOrResumeWorkout,
+    startPlannedWorkout,
+  } = useWorkoutFlow();
 
-  const addExercise = () => {
-    const now = Date.now();
-    setExercises((prev) => [
-      {
-        id: now,
-        name: 'New Exercise',
-        sets: [
-          {
-            id: now + 1,
-            weight: 0,
-            reps: 0,
-            completed: false,
-            type: 'normal',
-          },
-        ],
-      },
-      ...prev,
-    ]);
+  const routines = useMemo(() => plannedWorkouts.slice(0, 5), [plannedWorkouts]);
+  const recent = useMemo(() => workoutHistory.slice(0, 4), [workoutHistory]);
+
+  const startBlank = () => {
+    startEmptyWorkout();
+    navigation.navigate('ActiveWorkout');
   };
 
-  const toggleSetDone = (exerciseId: number, setId: number) => {
-    setExercises((prev) =>
-      prev.map((exercise) =>
-        exercise.id === exerciseId
-          ? {
-              ...exercise,
-              sets: exercise.sets.map((setItem) =>
-                setItem.id === setId ? { ...setItem, completed: !setItem.completed } : setItem,
-              ),
-            }
-          : exercise,
-      ),
-    );
+  const resumeWorkout = () => {
+    startOrResumeWorkout();
+    navigation.navigate('ActiveWorkout');
   };
 
-  const updateSet = (exerciseId: number, setId: number, field: 'weight' | 'reps', value: string) => {
-    const parsed = field === 'weight' ? Number.parseFloat(value || '0') : Number.parseInt(value || '0', 10);
-    const safeValue = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  const openRoutine = (index: number) => {
+    const routine = routines[index];
+    if (!routine) {
+      return;
+    }
 
-    setExercises((prev) =>
-      prev.map((exercise) =>
-        exercise.id === exerciseId
-          ? {
-              ...exercise,
-              sets: exercise.sets.map((setItem) =>
-                setItem.id === setId ? { ...setItem, [field]: safeValue } : setItem,
-              ),
-            }
-          : exercise,
-      ),
-    );
-  };
-
-  const addSet = (exerciseId: number) => {
-    setExercises((prev) =>
-      prev.map((exercise) => {
-        if (exercise.id !== exerciseId) {
-          return exercise;
-        }
-
-        const lastSet = exercise.sets[exercise.sets.length - 1];
-        return {
-          ...exercise,
-          sets: [
-            ...exercise.sets,
-            {
-              id: Date.now(),
-              weight: lastSet?.weight ?? 0,
-              reps: lastSet?.reps ?? 0,
-              completed: false,
-              type: 'normal',
-            },
-          ],
-        };
-      }),
-    );
+    startPlannedWorkout(routine);
+    navigation.navigate('ActiveWorkout');
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-      <Text style={styles.title}>NEW WORKOUT SCREEN FIRE</Text>
-
-      {exercises.map((exercise) => (
-        <View key={exercise.id} style={styles.exerciseCard}>
-          <Text style={styles.exerciseTitle}>{exercise.name}</Text>
-
-          {exercise.sets.map((setItem, index) => (
-            <View key={setItem.id} style={[styles.setRow, setItem.completed ? styles.setRowCompleted : null]}>
-              <Text style={styles.setIndex}>{index + 1}</Text>
-
-              <TextInput
-                value={String(setItem.weight)}
-                onChangeText={(text) => updateSet(exercise.id, setItem.id, 'weight', text)}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholder="kg"
-                placeholderTextColor="#9ca3af"
-              />
-
-              <TextInput
-                value={String(setItem.reps)}
-                onChangeText={(text) => updateSet(exercise.id, setItem.id, 'reps', text)}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholder="reps"
-                placeholderTextColor="#9ca3af"
-              />
-
-              <Pressable
-                onPress={() => toggleSetDone(exercise.id, setItem.id)}
-                style={[styles.doneButton, setItem.completed ? styles.doneButtonCompleted : null]}
-              >
-                <Text style={styles.doneButtonText}>{setItem.completed ? '✓' : ''}</Text>
-              </Pressable>
-            </View>
-          ))}
-
-          <Pressable style={styles.addSetButton} onPress={() => addSet(exercise.id)}>
-            <Text style={styles.addSetButtonText}>+ Add Set</Text>
-          </Pressable>
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Training</Text>
+          <Text style={styles.subtitle}>Start a blank workout, launch routines, or review your training history.</Text>
         </View>
-      ))}
 
-      <Pressable style={styles.addExerciseButton} onPress={addExercise}>
-        <Text style={styles.addExerciseButtonText}>+ Add Exercise</Text>
-      </Pressable>
-    </ScrollView>
+        <AppCard style={styles.primaryCard}>
+          <Text style={styles.sectionTitle}>Start New Training</Text>
+          <Text style={styles.sectionBody}>Use Blank Workout for fast logging, then add exercises from library in one tap.</Text>
+          <AppButton style={styles.cardButton} onPress={startBlank}>
+            Blank Workout
+          </AppButton>
+          <AppButton
+            variant="secondary"
+            style={styles.cardButton}
+            onPress={resumeWorkout}
+            disabled={!currentWorkout}
+          >
+            {currentWorkout ? 'Resume Active Workout' : 'No Active Workout'}
+          </AppButton>
+        </AppCard>
+
+        <AppCard>
+          <View style={styles.rowBetween}>
+            <Text style={styles.sectionTitle}>Routines</Text>
+            <AppButton variant="secondary" style={styles.inlineButton} onPress={() => navigation.navigate('Calendar')}>
+              Calendar
+            </AppButton>
+          </View>
+          {routines.length ? (
+            routines.map((routine, index) => (
+              <Pressable key={`${routine.date}-${routine.preview.id}-${index}`} style={styles.routineRow} onPress={() => openRoutine(index)}>
+                <View style={styles.routineCopy}>
+                  <Text style={styles.routineTitle}>{routine.preview.title}</Text>
+                  <Text style={styles.routineMeta}>{`${routine.preview.exercises.length} exercises • ${routine.preview.estimatedDurationMin} min`}</Text>
+                  <Text style={styles.routineMeta}>{`Scheduled: ${formatDate(routine.date)}`}</Text>
+                </View>
+                <Text style={styles.routineAction}>Start</Text>
+              </Pressable>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>No routines generated yet. Start one blank session and AI coach will create your next blocks.</Text>
+          )}
+        </AppCard>
+
+        <AppCard>
+          <View style={styles.rowBetween}>
+            <Text style={styles.sectionTitle}>History</Text>
+            <AppButton variant="secondary" style={styles.inlineButton} onPress={() => navigation.navigate('Calendar')}>
+              Full View
+            </AppButton>
+          </View>
+          {recent.length ? (
+            recent.map((entry) => (
+              <View key={`${entry.id}-${entry.completedAt}`} style={styles.historyRow}>
+                <View style={styles.routineCopy}>
+                  <Text style={styles.routineTitle}>{entry.summaryLine || 'Completed Workout'}</Text>
+                  <Text style={styles.routineMeta}>{`${entry.completedSets}/${entry.totalSets} sets • score ${entry.performance.toFixed(2)}`}</Text>
+                </View>
+                <Text style={styles.historyDate}>{formatDate(entry.completedAt)}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.emptyText}>No completed sessions yet.</Text>
+          )}
+        </AppCard>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
-    flexGrow: 1,
-    padding: 16,
-    paddingBottom: 120,
-    backgroundColor: '#050505',
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xl,
+    gap: spacing.md,
+  },
+  header: {
+    gap: 4,
   },
   title: {
-    color: '#ffffff',
-    fontSize: 24,
+    color: colors.text,
+    fontSize: typography.title,
+    fontWeight: '800',
+  },
+  subtitle: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+  },
+  primaryCard: {
+    backgroundColor: colors.surfaceStrong,
+    ...shadows.soft,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: typography.body,
     fontWeight: '700',
-    marginBottom: 16,
   },
-  exerciseCard: {
-    backgroundColor: '#111111',
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 16,
+  sectionBody: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    lineHeight: 18,
   },
-  exerciseTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 6,
+  cardButton: {
+    minHeight: 48,
   },
-  setRow: {
+  rowBetween: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#222222',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  setRowCompleted: {
-    backgroundColor: '#163d2b',
+  inlineButton: {
+    minHeight: 32,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
   },
-  setIndex: {
-    width: 30,
-    color: '#e5e7eb',
-    fontSize: 16,
-  },
-  input: {
-    flex: 1,
+  routineRow: {
     borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 8,
-    color: '#ffffff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginRight: 8,
-    backgroundColor: '#0f172a',
-  },
-  doneButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.backgroundElevated,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#333333',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  doneButtonCompleted: {
-    backgroundColor: '#16a34a',
+  historyRow: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.backgroundElevated,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
-  doneButtonText: {
-    color: '#ffffff',
+  routineCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  routineTitle: {
+    color: colors.text,
+    fontSize: typography.caption,
     fontWeight: '700',
-    fontSize: 18,
   },
-  addSetButton: {
-    marginTop: 10,
-    backgroundColor: '#1f2937',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
+  routineMeta: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
   },
-  addSetButtonText: {
-    color: '#d1d5db',
-    fontWeight: '600',
-  },
-  addExerciseButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  addExerciseButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
+  routineAction: {
+    color: colors.primary,
+    fontSize: typography.caption,
     fontWeight: '700',
+  },
+  historyDate: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+  },
+  emptyText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    lineHeight: 18,
   },
 });

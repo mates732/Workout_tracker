@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { HomeScreen } from '../features/home/HomeScreen';
+import { HomeScreen } from '../features/home/Home';
 import { ProfileScreen } from '../features/profile/ProfileScreen';
 import { TrainingScreen } from '../features/training/TrainingScreen';
 import { colors } from '../shared/theme/tokens';

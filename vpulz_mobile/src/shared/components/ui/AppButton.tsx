@@ -59,8 +59,8 @@ const styles = StyleSheet.create({
     borderWidth: 0,
   },
   secondary: {
-    borderColor: 'rgba(255,255,255,0.06)',
-    backgroundColor: colors.backgroundElevated,
+    borderColor: 'rgba(10,132,255,0.55)',
+    backgroundColor: 'transparent',
     borderWidth: 1,
   },
   ghost: {
@@ -68,8 +68,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   danger: {
-    borderColor: '#5D2632',
-    backgroundColor: '#3E1B25',
+    borderColor: 'rgba(255,69,58,0.7)',
+    backgroundColor: 'rgba(255,69,58,0.14)',
   },
   pressed: {
     opacity: 0.85,
@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
     color: colors.primaryText,
   },
   secondaryLabel: {
-    color: colors.text,
+    color: colors.primary,
   },
   ghostLabel: {
     color: colors.mutedText,

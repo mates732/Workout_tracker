@@ -1,13 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AppCard, AppChip, AppInput, AppButton } from '../../shared/components/ui';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../../navigation/RootNavigator';
+import { AppCard, AppChip, AppInput } from '../../shared/components/ui';
 import { useDeviceReader } from '../../shared/device/useDeviceReader';
 import {
-  type AppTheme,
   type AiCoachStyle,
   type EquipmentType,
   type HistoryLimit,
@@ -36,7 +32,6 @@ const TRAINING_DAYS: Array<{ key: Weekday; label: string }> = [
 const EQUIPMENT_TYPES: EquipmentType[] = ['gym', 'home', 'bodyweight'];
 const WEIGHT_UNITS: WeightUnits[] = ['kg', 'lbs'];
 const COACH_STYLES: AiCoachStyle[] = ['motivational', 'strict', 'neutral'];
-const APP_THEMES: AppTheme[] = ['dark', 'light'];
 const HISTORY_LIMITS: HistoryLimit[] = ['30_days', 'unlimited'];
 
 function parsePositiveInt(value: string, fallback: number): number {
@@ -50,14 +45,27 @@ function parsePositiveNumber(value: string, fallback: number): number {
 }
 
 export function ProfileScreen() {
-  const { settings, updateSettings, workoutPlan, setCurrentWorkout } = useWorkoutFlow();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { settings, updateSettings, workoutPlan } = useWorkoutFlow();
   const insets = useSafeAreaInsets();
   const { horizontalGutter } = useDeviceReader();
 
   const mutate = useCallback((updater: (current: UserAppSettings) => UserAppSettings) => {
     updateSettings(updater);
   }, [updateSettings]);
+
+  useEffect(() => {
+    if (settings.general.theme === 'dark') {
+      return;
+    }
+
+    mutate((current) => ({
+      ...current,
+      general: {
+        ...current.general,
+        theme: 'dark',
+      },
+    }));
+  }, [mutate, settings.general.theme]);
 
   return (
     <SafeAreaView
@@ -479,24 +487,7 @@ export function ProfileScreen() {
             ))}
           </View>
           <Text style={styles.fieldLabel}>Theme</Text>
-          <View style={styles.chipsRow}>
-            {APP_THEMES.map((theme) => (
-              <AppChip
-                key={theme}
-                label={theme}
-                selected={settings.general.theme === theme}
-                onPress={() =>
-                  mutate((current) => ({
-                    ...current,
-                    general: {
-                      ...current.general,
-                      theme,
-                    },
-                  }))
-                }
-              />
-            ))}
-          </View>
+          <Text style={styles.previewBody}>Dark mode is always enabled for a clean, premium workout experience.</Text>
           <Text style={styles.fieldLabel}>Calendar preview</Text>
           <View style={styles.chipsRow}>
             {[
