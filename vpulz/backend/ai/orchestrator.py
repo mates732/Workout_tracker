@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from vpulz.backend.ai.providers import FastInferenceProvider, ReasoningProvider
-from vpulz.backend.ai.retrieval import KnowledgeRetriever
-from vpulz.backend.models.domain import Routine, UserProfile, Workout
-from vpulz.backend.services.progress import ProgressService
+from backend.ai.providers import FastInferenceProvider, ReasoningProvider
+from backend.ai.retrieval import KnowledgeRetriever
+from backend.models.domain import Routine, UserProfile, Workout
+from backend.services.progress import ProgressService
 
 
 @dataclass

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from vpulz.backend.models.domain import UserProfile
-from vpulz.backend.repositories.memory_repo import RoutineRepository
-from vpulz.backend.schemas.api import CreateRoutineRequest
-from vpulz.backend.services.routines import RoutineService
+from backend.models.domain import UserProfile
+from backend.repositories.memory_repo import RoutineRepository
+from backend.schemas.api import CreateRoutineRequest
+from backend.services.routines import RoutineService
 
 router = APIRouter(prefix="/routines", tags=["routines"])
 repo = RoutineRepository()
