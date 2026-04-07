@@ -15,13 +15,14 @@ export function AppInput(props: AppInputProps) {
 
 const styles = StyleSheet.create({
   input: {
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
+    backgroundColor: colors.surface,
     color: colors.text,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     fontSize: typography.body,
+    fontWeight: '600',
   },
 });

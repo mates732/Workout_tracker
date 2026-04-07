@@ -1,19 +1,19 @@
 export const colors = {
   background: '#000000',
-  backgroundElevated: '#0F0F10',
+  backgroundElevated: '#0B0B0C',
   surface: '#111111',
-  surfaceStrong: '#1A1A1A',
+  surfaceStrong: '#141414',
   text: '#FFFFFF',
-  mutedText: '#9B9BA1',
-  secondaryText: '#D1D1D8',
+  mutedText: '#8E8E93',
+  secondaryText: '#C7C7CC',
   primary: '#0A84FF',
   primaryText: '#FFFFFF',
-  border: '#2A2A2F',
+  border: '#1C1C1E',
   glow: '#4AA3FF',
   danger: '#FF453A',
   success: '#34C759',
   accent: '#34C759',
-  planned: '#9A9A9A',
+  planned: '#34C759',
   sick: '#9A9A9A',
   splitLegs: '#FF3B30',
   splitArms: '#34C759',
@@ -22,12 +22,12 @@ export const colors = {
 } as const;
 
 export const spacing = {
-  xs: 4,
-  sm: 8,
-  md: 14,
+  xs: 8,
+  sm: 12,
+  md: 16,
   lg: 20,
-  xl: 28,
-  xxl: 36,
+  xl: 24,
+  xxl: 28,
 } as const;
 
 export const typography = {
@@ -40,26 +40,26 @@ export const typography = {
 } as const;
 
 export const radius = {
-  sm: 10,
-  md: 14,
-  lg: 20,
-  xl: 26,
+  sm: 20,
+  md: 22,
+  lg: 24,
+  xl: 28,
   pill: 999,
 } as const;
 
 export const shadows = {
   soft: {
     shadowColor: '#000000',
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 3,
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 1,
   },
   lifted: {
     shadowColor: '#000000',
-    shadowOpacity: 0.28,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 6,
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
   },
 } as const;

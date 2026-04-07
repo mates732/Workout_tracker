@@ -15,7 +15,7 @@ import {
   type WeightUnits,
 } from '../../shared/state/userAppSettingsStore';
 import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
-import { colors, spacing, typography } from '../../shared/theme/tokens';
+import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
 
 const LEVELS: UserLevel[] = ['beginner', 'intermediate', 'advanced'];
 const GOALS: UserGoal[] = ['fat_loss', 'muscle_gain', 'maintenance'];
@@ -575,8 +575,8 @@ const styles = StyleSheet.create({
   },
   content: {
     gap: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: 108,
+    paddingTop: spacing.md,
+    paddingBottom: 120,
   },
   pageTitle: {
     color: colors.text,
@@ -584,10 +584,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   pageSubtitle: {
-    marginTop: 2,
+    marginTop: spacing.xs,
     color: colors.mutedText,
-    fontSize: typography.body,
-    lineHeight: 22,
+    fontSize: typography.caption,
+    lineHeight: 20,
   },
   previewTitle: {
     color: colors.text,
@@ -595,9 +595,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   previewBody: {
-    color: colors.text,
-    fontSize: typography.body,
-    lineHeight: 22,
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    lineHeight: 20,
   },
   previewMetaLine: { color: colors.mutedText, fontSize: typography.tiny, marginTop: 4 },
   exerciseListMinimal: { marginTop: 6 },
@@ -605,8 +605,8 @@ const styles = StyleSheet.create({
   moreText: { color: colors.mutedText, fontSize: typography.tiny, marginTop: 4 },
   sectionTitle: {
     color: colors.text,
-    fontSize: typography.subtitle,
-    fontWeight: '700',
+    fontSize: typography.body,
+    fontWeight: '800',
   },
   row: {
     flexDirection: 'row',
@@ -618,25 +618,31 @@ const styles = StyleSheet.create({
   chipsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: spacing.sm,
   },
   fieldLabel: {
     color: colors.mutedText,
-    fontSize: typography.caption,
-    fontWeight: '600',
+    fontSize: typography.tiny,
+    fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   toggleRow: {
-    minHeight: 40,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.surface,
   },
   toggleLabel: {
     color: colors.text,
-    fontSize: typography.body,
+    fontSize: typography.caption,
+    fontWeight: '700',
     flex: 1,
   },
 });

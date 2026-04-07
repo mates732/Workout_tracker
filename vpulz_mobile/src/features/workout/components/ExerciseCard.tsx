@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { SetType, WorkoutExerciseState } from '../../../shared/api/workoutApi';
 import type { GeneratedWorkoutExercise } from '../../../shared/state/settingsLogic';
 import { AppButton } from '../../../shared/components/ui';
-import { colors, spacing, typography } from '../../../shared/theme/tokens';
+import { colors, radius, spacing, typography } from '../../../shared/theme/tokens';
 import SetRow from './SetRow';
 
 type DraftSet = { weight: string; reps: string };
@@ -19,7 +19,6 @@ interface Props {
   onPressSetType: (rowIndex: number) => void;
   onToggleSet: (rowIndex: number) => Promise<void>;
   onAddSetRow: () => void;
-  onAddExerciseBelow: () => void;
 }
 
 function computeActiveRow(exercise: WorkoutExerciseState, rowCount: number): number {
@@ -43,7 +42,6 @@ export const ExerciseCard: React.FC<Props> = ({
   onPressSetType,
   onToggleSet,
   onAddSetRow,
-  onAddExerciseBelow,
 }) => {
   const completedCount = useMemo(() => exercise.sets.filter((s) => s.completed).length, [exercise.sets]);
   const activeRow = useMemo(() => computeActiveRow(exercise, rowCount), [exercise, rowCount]);
@@ -119,9 +117,6 @@ export const ExerciseCard: React.FC<Props> = ({
         </View>
       </View>
 
-      <AppButton variant="ghost" style={styles.addExerciseBelow} onPress={onAddExerciseBelow}>
-        Add Exercise
-      </AppButton>
     </View>
   );
 };
@@ -132,7 +127,7 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: spacing.sm,
-    borderRadius: 14,
+    borderRadius: radius.lg,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
@@ -196,13 +191,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   actionBtn: {
-    minHeight: 42,
-  },
-  addExerciseBelow: {
-    minHeight: 42,
-    borderStyle: 'dashed',
-    borderColor: colors.border,
-    borderWidth: 1,
+    minHeight: 46,
   },
 });
 

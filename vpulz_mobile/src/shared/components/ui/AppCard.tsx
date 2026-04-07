@@ -17,7 +17,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
     padding: spacing.md,
-    gap: spacing.sm,
+    gap: spacing.md,
     ...shadows.soft,
   },
 });

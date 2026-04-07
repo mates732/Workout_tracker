@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  Vibration,
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -148,6 +149,7 @@ export function AddExerciseScreen() {
   }, [query, category]);
 
   const toggleSelect = (item: ExerciseItem) => {
+    Vibration.vibrate(6);
     setSelectedById((current) => {
       const next = { ...current };
       if (next[item.id]) {
@@ -250,7 +252,7 @@ export function AddExerciseScreen() {
                     <Text style={styles.rowMeta}>{`${item.muscle_group} • ${item.equipment}`}</Text>
                   </View>
                   <Text style={[styles.rowStatus, selected && styles.rowStatusSelected]}>
-                    {selected ? 'Selected' : 'Tap to select'}
+                    {selected ? 'Selected' : 'Select'}
                   </Text>
                 </Pressable>
               );
@@ -269,7 +271,7 @@ export function AddExerciseScreen() {
 
         <View style={styles.footer}>
           <Text style={styles.selectionText}>{`${selectedItems.length} selected`}</Text>
-          <AppButton onPress={confirmSelection} disabled={submitting}>
+          <AppButton onPress={confirmSelection} disabled={submitting || loading}>
             {submitting ? 'Adding...' : `Add Selected${selectedItems.length ? ` (${selectedItems.length})` : ''}`}
           </AppButton>
         </View>
@@ -292,7 +294,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   title: {
     color: colors.text,
@@ -305,7 +307,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   input: {
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -316,11 +318,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   categoryRow: {
-    paddingVertical: spacing.sm,
-    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
   },
   categoryChip: {
-    minHeight: 34,
+    minHeight: 40,
     paddingHorizontal: spacing.sm,
     borderRadius: radius.pill,
     borderWidth: 1,
@@ -344,21 +346,21 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
   row: {
-    minHeight: 62,
+    minHeight: 74,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
     gap: spacing.sm,
   },
   rowSelected: {
-    borderColor: colors.accent,
-    backgroundColor: 'rgba(52,199,89,0.16)',
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(10,132,255,0.12)',
   },
   rowCopy: {
     flex: 1,
@@ -371,7 +373,7 @@ const styles = StyleSheet.create({
   rowMeta: {
     color: colors.mutedText,
     fontSize: typography.tiny,
-    marginTop: 2,
+    marginTop: spacing.xs,
   },
   rowStatus: {
     color: colors.mutedText,
@@ -379,7 +381,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   rowStatusSelected: {
-    color: colors.accent,
+    color: colors.primary,
   },
   stateWrap: {
     paddingTop: spacing.lg,
@@ -398,10 +400,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: spacing.md,
     right: spacing.md,
-    bottom: spacing.md,
-    gap: spacing.xs,
+    bottom: spacing.lg,
+    gap: spacing.sm,
     backgroundColor: colors.background,
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
   },
   selectionText: {
     color: colors.mutedText,

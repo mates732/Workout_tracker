@@ -2,7 +2,7 @@ import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
-import { colors, typography } from '../../shared/theme/tokens';
+import { colors, radius, typography } from '../../shared/theme/tokens';
 
 type MinimizedWorkoutBarProps = {
   onPress: () => void;
@@ -60,8 +60,8 @@ const styles = StyleSheet.create({
     elevation: 100,
   },
   bar: {
-    minHeight: 56,
-    borderRadius: 14,
+    minHeight: 60,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,

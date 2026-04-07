@@ -17,26 +17,26 @@ export function AppChip({ label, selected, onPress }: AppChipProps) {
 
 const styles = StyleSheet.create({
   chip: {
-    minHeight: 36,
-    paddingHorizontal: 12,
+    minHeight: 40,
+    paddingHorizontal: 16,
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.backgroundElevated,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   selected: {
-    backgroundColor: colors.primary,
+    backgroundColor: 'rgba(10,132,255,0.16)',
     borderColor: colors.primary,
   },
   label: {
     color: colors.mutedText,
     fontSize: typography.caption,
-    fontWeight: '600',
+    fontWeight: '700',
     textTransform: 'capitalize',
   },
   selectedLabel: {
-    color: colors.primaryText,
+    color: colors.primary,
   },
 });
