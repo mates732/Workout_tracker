@@ -46,22 +46,20 @@ export function AppButton({ children, variant = 'primary', style, ...props }: Ap
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
-    borderWidth: 0,
+    paddingHorizontal: 18,
+    borderWidth: 1,
   },
   primary: {
     borderColor: 'transparent',
     backgroundColor: colors.primary,
-    borderWidth: 0,
   },
   secondary: {
-    borderColor: 'rgba(10,132,255,0.55)',
+    borderColor: colors.primary,
     backgroundColor: 'transparent',
-    borderWidth: 1,
   },
   ghost: {
     borderColor: colors.border,
@@ -76,7 +74,8 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: typography.body,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: 0.1,
   },
   primaryLabel: {
     color: colors.primaryText,

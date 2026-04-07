@@ -1,7 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo } from 'react';
+import { ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
 import { CalendarComponent } from '../calendar/components/CalendarComponent';
@@ -30,25 +30,36 @@ function toDateKey(value: string): string {
 export function HomeScreen() {
   const navigation = useNavigation<HomeNavigationProp>();
   const insets = useSafeAreaInsets();
-  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const {
     selectedDate,
     setSelectedDate,
     plannedWorkouts,
     workoutHistory,
-    userProfile,
-    startEmptyWorkout,
     startPlannedWorkout,
     startOrResumeWorkout,
   } = useWorkoutFlow();
+
+  const todayKey = useMemo(() => toDateKey(new Date().toISOString()), []);
+
+  const selectedDayPlanned = useMemo(() => {
+    return plannedWorkouts.filter((item) => item.date === selectedDate);
+  }, [plannedWorkouts, selectedDate]);
+
+  const selectedDayCompletedCount = useMemo(() => {
+    return workoutHistory.filter((item) => toDateKey(item.completedAt) === selectedDate).length;
+  }, [selectedDate, workoutHistory]);
 
   const nextWorkout = useMemo(() => {
     if (!plannedWorkouts.length) {
       return null;
     }
 
-    return plannedWorkouts.find((item) => item.date >= selectedDate) ?? plannedWorkouts[0];
-  }, [plannedWorkouts, selectedDate]);
+    return (
+      plannedWorkouts.find((item) => item.date === todayKey) ??
+      plannedWorkouts.find((item) => item.date > todayKey) ??
+      plannedWorkouts[0]
+    );
+  }, [plannedWorkouts, todayKey]);
 
   const workoutDates = useMemo(() => {
     const keys = new Set<string>();
@@ -64,20 +75,16 @@ export function HomeScreen() {
     return Array.from(keys);
   }, [plannedWorkouts, workoutHistory]);
 
-  const selectedDayCount = useMemo(() => {
-    const planned = plannedWorkouts.filter((item) => item.date === selectedDate).length;
-    const completed = workoutHistory.filter((item) => toDateKey(item.completedAt) === selectedDate).length;
-    return planned + completed;
-  }, [plannedWorkouts, selectedDate, workoutHistory]);
-
-  const startBlankWorkout = () => {
-    startEmptyWorkout();
+  const startWorkout = () => {
+    Vibration.vibrate(8);
+    startOrResumeWorkout();
     navigation.navigate('ActiveWorkout');
   };
 
-  const openNextWorkout = () => {
+  const startNextWorkout = () => {
+    Vibration.vibrate(8);
     if (!nextWorkout) {
-      startBlankWorkout();
+      startWorkout();
       return;
     }
 
@@ -85,10 +92,38 @@ export function HomeScreen() {
     navigation.navigate('ActiveWorkout');
   };
 
-  const openExerciseLibrary = () => {
-    startOrResumeWorkout();
-    setQuickActionsOpen(false);
-    navigation.navigate('ExerciseLibrary');
+  const selectedDayIndicator = useMemo(() => {
+    if (selectedDayPlanned.length) {
+      return `${selectedDayPlanned.length} planned workout${selectedDayPlanned.length > 1 ? 's' : ''} for selected day`;
+    }
+
+    if (selectedDayCompletedCount) {
+      return `${selectedDayCompletedCount} completed workout${selectedDayCompletedCount > 1 ? 's' : ''} on selected day`;
+    }
+
+    return 'No workout planned for selected day';
+  }, [selectedDayCompletedCount, selectedDayPlanned.length]);
+
+  const selectedDayPreview = useMemo(() => {
+    const planned = selectedDayPlanned[0];
+    if (!planned) {
+      return null;
+    }
+
+    return `${planned.preview.title} • ${planned.preview.exercises.length} exercises • ~${planned.preview.estimatedDurationMin} min`;
+  }, [selectedDayPlanned]);
+
+  const startSelectedDayWorkout = () => {
+    const planned = selectedDayPlanned[0];
+    Vibration.vibrate(8);
+
+    if (!planned) {
+      startWorkout();
+      return;
+    }
+
+    startPlannedWorkout(planned);
+    navigation.navigate('ActiveWorkout');
   };
 
   return (
@@ -104,19 +139,18 @@ export function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.topCopy}>
-          <Text style={styles.greeting}>{`Welcome back, ${userProfile.username || 'Athlete'}`}</Text>
-          <Text style={styles.subGreeting}>Build your next session in under a minute.</Text>
+          <Text style={styles.greeting}>Welcome back, Athlete</Text>
+          <Text style={styles.subGreeting}>Your training dashboard is ready.</Text>
         </View>
 
-        <Pressable
-          style={styles.startButton}
-          onPress={startBlankWorkout}
-          accessibilityRole="button"
-          accessibilityLabel="Start new workout"
-        >
-          <Text style={styles.startButtonEyebrow}>Quick Start</Text>
-          <Text style={styles.startButtonText}>Start New Workout</Text>
-        </Pressable>
+        <AppCard style={styles.primaryCtaCard}>
+          <Text style={styles.startButtonEyebrow}>Primary Action</Text>
+          <Text style={styles.startButtonText}>Start Workout</Text>
+          <Text style={styles.startButtonMeta}>Resumes your active session if one exists.</Text>
+          <AppButton style={styles.primaryStartButton} onPress={startWorkout}>
+            Start Workout
+          </AppButton>
+        </AppCard>
 
         <AppCard style={styles.calendarCard}>
           <View style={styles.cardHeader}>
@@ -138,10 +172,18 @@ export function HomeScreen() {
           />
 
           <Text style={styles.calendarMeta}>
-            {selectedDayCount > 0
-              ? `${selectedDayCount} workout${selectedDayCount > 1 ? 's' : ''} on selected day`
-              : 'No workout planned for selected day'}
+            {selectedDayIndicator}
           </Text>
+
+          {selectedDayPreview ? (
+            <View style={styles.selectedPlanWrap}>
+              <Text style={styles.selectedPlanLabel}>Selected Day Plan</Text>
+              <Text style={styles.selectedPlanValue}>{selectedDayPreview}</Text>
+              <AppButton variant="secondary" style={styles.selectedPlanButton} onPress={startSelectedDayWorkout}>
+                Start Selected
+              </AppButton>
+            </View>
+          ) : null}
         </AppCard>
 
         <AppCard style={styles.nextWorkoutCard}>
@@ -152,7 +194,7 @@ export function HomeScreen() {
               <Text style={styles.nextWorkoutMeta}>{`${nextWorkout.preview.exercises.length} exercises`}</Text>
               <Text style={styles.nextWorkoutMeta}>{`~${nextWorkout.preview.estimatedDurationMin} min`}</Text>
               <View style={{ marginTop: spacing.sm }}>
-                <AppButton onPress={openNextWorkout}>Open Workout</AppButton>
+                <AppButton onPress={startNextWorkout}>Start</AppButton>
               </View>
             </>
           ) : (
@@ -160,46 +202,12 @@ export function HomeScreen() {
               <Text style={styles.nextWorkoutName}>No routine scheduled yet</Text>
               <Text style={styles.nextWorkoutMeta}>Start from blank and the coach will shape your plan.</Text>
               <View style={{ marginTop: spacing.sm }}>
-                <AppButton onPress={startBlankWorkout}>Start Blank Workout</AppButton>
+                <AppButton onPress={startWorkout}>Start Workout</AppButton>
               </View>
             </>
           )}
         </AppCard>
       </ScrollView>
-
-      <Pressable
-        style={[styles.fab, { bottom: Math.max(96, insets.bottom + 84) }]}
-        onPress={() => setQuickActionsOpen(true)}
-        accessibilityRole="button"
-        accessibilityLabel="Open quick actions"
-      >
-        <Text style={styles.fabText}>+</Text>
-      </Pressable>
-
-      <Modal
-        visible={quickActionsOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setQuickActionsOpen(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setQuickActionsOpen(false)}>
-          <View style={styles.quickSheet}>
-            <Text style={styles.quickTitle}>Quick Actions</Text>
-            <AppButton
-              style={styles.quickButton}
-              onPress={() => {
-                setQuickActionsOpen(false);
-                startBlankWorkout();
-              }}
-            >
-              Create New Workout
-            </AppButton>
-            <AppButton variant="secondary" style={styles.quickButton} onPress={openExerciseLibrary}>
-              Open Exercise Library
-            </AppButton>
-          </View>
-        </Pressable>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -214,7 +222,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   topCopy: {
-    gap: 4,
+    gap: spacing.xs,
   },
   greeting: {
     color: colors.text,
@@ -226,28 +234,30 @@ const styles = StyleSheet.create({
     color: colors.mutedText,
     fontSize: typography.caption,
   },
-  startButton: {
-    width: '100%',
-    minHeight: 92,
-    borderRadius: 20,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-    gap: 2,
-    ...shadows.lifted,
+  primaryCtaCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    ...shadows.soft,
   },
   startButtonEyebrow: {
-    color: 'rgba(255,255,255,0.8)',
+    color: colors.mutedText,
     fontSize: typography.caption,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   startButtonText: {
-    color: colors.primaryText,
-    fontSize: 28,
+    color: colors.text,
+    fontSize: typography.subtitle,
     fontWeight: '800',
-    letterSpacing: 0.2,
+    letterSpacing: -0.2,
+  },
+  startButtonMeta: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+  },
+  primaryStartButton: {
+    marginTop: spacing.xs,
   },
   calendarCard: {
     borderRadius: radius.lg,
@@ -266,17 +276,40 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     minHeight: 34,
-    borderRadius: 10,
+    borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
   },
   calendarMeta: {
     color: colors.mutedText,
     fontSize: typography.caption,
-    marginTop: 2,
+  },
+  selectedPlanWrap: {
+    marginTop: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.backgroundElevated,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  selectedPlanLabel: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  selectedPlanValue: {
+    color: colors.text,
+    fontSize: typography.caption,
+    lineHeight: 20,
+  },
+  selectedPlanButton: {
+    minHeight: 48,
   },
   nextWorkoutCard: {
     borderRadius: radius.lg,
-    backgroundColor: colors.surfaceStrong,
+    backgroundColor: colors.surface,
   },
   nextWorkoutName: {
     color: colors.text,
@@ -286,47 +319,5 @@ const styles = StyleSheet.create({
   nextWorkoutMeta: {
     color: colors.mutedText,
     fontSize: typography.caption,
-  },
-  fab: {
-    position: 'absolute',
-    right: spacing.md,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...shadows.lifted,
-  },
-  fabText: {
-    color: colors.primaryText,
-    fontSize: 30,
-    fontWeight: '600',
-    marginTop: -1,
-  },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: '#000000A6',
-  },
-  quickSheet: {
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
-    gap: spacing.sm,
-  },
-  quickTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
-    fontWeight: '700',
-  },
-  quickButton: {
-    minHeight: 50,
   },
 });

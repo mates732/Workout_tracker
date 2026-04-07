@@ -101,6 +101,7 @@ export type TimerState = {
   elapsedSeconds: number;
   isRunning: boolean;
   isAppActive: boolean;
+  isWorkoutScreenVisible: boolean;
   startedAt: string | null;
 };
 
@@ -115,6 +116,7 @@ export type AppState = {
 type PersistedWorkoutState = {
   currentWorkout: CurrentWorkout | null;
   selectedDate?: string;
+  elapsedSeconds?: number;
 };
 
 type LegacyPersistedWorkoutState = {
@@ -143,6 +145,7 @@ type WorkoutFlowContextValue = {
   error: string | null;
   clearError: () => void;
   isWorkoutMinimized: boolean;
+  setWorkoutScreenVisible: (visible: boolean) => void;
   minimizeWorkout: () => void;
   restoreWorkout: () => void;
   currentWorkout: CurrentWorkout | null;
@@ -492,6 +495,20 @@ function parsePersistedCurrentWorkout(raw: string): CurrentWorkout | null {
           ? legacy.latestSetSuggestion
           : null,
     };
+  } catch {
+    return null;
+  }
+}
+
+function parsePersistedElapsedSeconds(raw: string): number | null {
+  try {
+    const parsed = JSON.parse(raw) as PersistedWorkoutState;
+    const value = parsed.elapsedSeconds;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return null;
+    }
+
+    return Math.max(0, Math.floor(value));
   } catch {
     return null;
   }
@@ -960,6 +977,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isAppActive, setIsAppActive] = useState<boolean>(NativeAppState.currentState === 'active');
+  const [isWorkoutScreenVisible, setIsWorkoutScreenVisibleState] = useState<boolean>(false);
   const appStateRef = useRef(appState);
 
   useEffect(() => {
@@ -1027,7 +1045,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    if (!isAppActive) {
+    if (!isAppActive || !isWorkoutScreenVisible) {
       return;
     }
 
@@ -1042,25 +1060,35 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         timerRef.current = null;
       }
     };
-  }, [currentWorkout?.session.id, isAppActive]);
+  }, [currentWorkout?.session.id, isAppActive, isWorkoutScreenVisible]);
 
   useEffect(() => {
     if (!currentWorkout) {
       setElapsedSeconds(0);
+      setIsWorkoutScreenVisibleState(false);
       return;
     }
-
-    setElapsedSeconds(toElapsedSeconds(currentWorkout.session.startTime));
   }, [currentWorkout?.session.id]);
+
+  const setWorkoutScreenVisible = useCallback((visible: boolean) => {
+    setIsWorkoutScreenVisibleState((current) => {
+      if (current === visible) {
+        return current;
+      }
+
+      return visible;
+    });
+  }, []);
 
   const timerState = useMemo<TimerState>(
     () => ({
       elapsedSeconds,
-      isRunning: Boolean(currentWorkout) && isAppActive,
+      isRunning: Boolean(currentWorkout) && isAppActive && isWorkoutScreenVisible,
       isAppActive,
+      isWorkoutScreenVisible,
       startedAt: currentWorkout?.session.startTime ?? null,
     }),
-    [currentWorkout, elapsedSeconds, isAppActive]
+    [currentWorkout, elapsedSeconds, isAppActive, isWorkoutScreenVisible]
   );
 
   const setConnection = useCallback((next: ConnectionConfig) => {
@@ -1200,6 +1228,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
           ...current,
           currentWorkout: restored,
         }));
+        setIsWorkoutScreenVisibleState(true);
 
         return restored.workout;
       }
@@ -1209,6 +1238,8 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         ...current,
         currentWorkout: nextCurrentWorkout,
       }));
+      setElapsedSeconds(0);
+      setIsWorkoutScreenVisibleState(true);
       return nextCurrentWorkout.workout;
     },
     [connection]
@@ -1232,6 +1263,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         ...current,
         currentWorkout: restored,
       }));
+      setIsWorkoutScreenVisibleState(true);
 
       return restored.workout;
     }
@@ -1258,6 +1290,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         ...current,
         currentWorkout: restored,
       }));
+      setIsWorkoutScreenVisibleState(true);
 
       return restored.workout;
     }
@@ -1324,6 +1357,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         selectedDate: snapshot.selectedDate,
       });
       setElapsedSeconds(0);
+      setIsWorkoutScreenVisibleState(false);
 
       try {
         requiredConnection(connection);
@@ -1406,6 +1440,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       });
 
       setElapsedSeconds(0);
+      setIsWorkoutScreenVisibleState(false);
     },
     [elapsedSeconds]
   );
@@ -1422,6 +1457,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       selectedDate: snapshot.selectedDate,
     });
     setElapsedSeconds(0);
+    setIsWorkoutScreenVisibleState(false);
   }, []);
 
   const addExerciseToActiveWorkout = useCallback(
@@ -1751,6 +1787,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         ]);
 
         const persistedCurrentWorkout = persistedRaw ? parsePersistedCurrentWorkout(persistedRaw) : null;
+        const persistedElapsedSeconds = persistedRaw ? parsePersistedElapsedSeconds(persistedRaw) : null;
         let selectedDateFromSession: string | null = null;
         if (persistedRaw) {
           try {
@@ -1796,7 +1833,9 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
         }));
 
         if (persistedCurrentWorkout) {
-          setElapsedSeconds(toElapsedSeconds(persistedCurrentWorkout.session.startTime));
+          setElapsedSeconds(
+            persistedElapsedSeconds ?? toElapsedSeconds(persistedCurrentWorkout.session.startTime)
+          );
         }
       } finally {
         if (!cancelled) {
@@ -1832,10 +1871,11 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
     const payload: PersistedWorkoutState = {
       currentWorkout,
       selectedDate,
+      elapsedSeconds,
     };
 
     void AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload)).catch(() => undefined);
-  }, [currentWorkout, selectedDate]);
+  }, [currentWorkout, elapsedSeconds, selectedDate]);
 
   useEffect(() => {
     void AsyncStorage.setItem(SELECTED_DATE_STORAGE_KEY, selectedDate).catch(() => undefined);
@@ -1857,6 +1897,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   }, [workoutHistory]);
 
   const minimizeWorkout = useCallback(() => {
+    setIsWorkoutScreenVisibleState(false);
     setAppState((current) => {
       if (!current.currentWorkout || current.currentWorkout.session.minimized) {
         return current;
@@ -1876,6 +1917,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
   }, []);
 
   const restoreWorkout = useCallback(() => {
+    setIsWorkoutScreenVisibleState(true);
     setAppState((current) => {
       if (!current.currentWorkout || !current.currentWorkout.session.minimized) {
         return current;
@@ -1913,6 +1955,7 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       error,
       clearError,
       isWorkoutMinimized: Boolean(currentWorkout?.session.minimized),
+      setWorkoutScreenVisible,
       minimizeWorkout,
       restoreWorkout,
       currentWorkout,
@@ -1961,9 +2004,11 @@ export function WorkoutFlowProvider({ children }: PropsWithChildren) {
       plannedWorkouts,
       refreshActiveWorkout,
       refreshWorkoutState,
+      resetActiveWorkout,
       resetSettings,
       selectedDate,
       setSelectedDate,
+      setWorkoutScreenVisible,
       setCurrentWorkout,
       restoreWorkout,
       searchExerciseLibrary,

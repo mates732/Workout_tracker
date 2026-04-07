@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import type { TextInput as TextInputType } from 'react-native';
 import type { SetType } from '../../../shared/api/workoutApi';
-import { colors, spacing, typography } from '../../../shared/theme/tokens';
+import { colors, radius, spacing, typography } from '../../../shared/theme/tokens';
 
 interface Props {
   index: number;
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.xs,
-    borderRadius: 10,
+    borderRadius: radius.sm,
   },
   active: {
     backgroundColor: colors.backgroundElevated,
@@ -179,8 +179,8 @@ const styles = StyleSheet.create({
   },
   typeButton: {
     width: 40,
-    height: 42,
-    borderRadius: 10,
+    height: 44,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',
@@ -207,10 +207,10 @@ const styles = StyleSheet.create({
   },
   input: {
     width: 66,
-    minHeight: 42,
+    minHeight: 44,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 10,
+    borderRadius: radius.sm,
     color: colors.text,
     backgroundColor: colors.backgroundElevated,
     paddingHorizontal: spacing.sm,
@@ -224,8 +224,8 @@ const styles = StyleSheet.create({
   },
   checkButton: {
     width: 36,
-    height: 42,
-    borderRadius: 10,
+    height: 44,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
     alignItems: 'center',

@@ -4,6 +4,8 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
+    "start:tunnel": "EXPO_FORCE_WEBCONTAINER_ENV=1 expo start --tunnel --port 8081",
+    "start:tunnel:clear": "EXPO_FORCE_WEBCONTAINER_ENV=1 expo start --tunnel --port 8081 --clear",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

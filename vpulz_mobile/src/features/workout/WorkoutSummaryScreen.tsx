@@ -16,6 +16,20 @@ function formatVolume(volume: number): string {
   return `${Math.round(volume).toLocaleString()} kg`;
 }
 
+function toShortFeedback(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return 'Strong session. Recover and come back sharper.';
+  }
+
+  const firstSentence = trimmed.split(/[.!?]\s/)[0]?.trim();
+  if (!firstSentence) {
+    return trimmed;
+  }
+
+  return firstSentence.endsWith('.') ? firstSentence : `${firstSentence}.`;
+}
+
 export function WorkoutSummaryScreen() {
   const navigation = useNavigation<WorkoutSummaryNavigationProp>();
   const route = useRoute<WorkoutSummaryRouteProp>();
@@ -63,7 +77,7 @@ export function WorkoutSummaryScreen() {
 
         <AppCard>
           <Text style={styles.sectionLabel}>Post Workout Feedback</Text>
-          <Text style={styles.feedbackText}>{summary.feedback ?? generateFeedback(summary.performance)}</Text>
+          <Text style={styles.feedbackText}>{toShortFeedback(summary.feedback ?? generateFeedback(summary.performance))}</Text>
           <Text style={styles.supportText}>Total sets logged: {summary.completedSets}</Text>
         </AppCard>
 

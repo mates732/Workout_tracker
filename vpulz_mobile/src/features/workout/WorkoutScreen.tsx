@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AppState as NativeAppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Modal, ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
 import { AppButton, AppCard, AppInput, StickyActionBar } from '../../shared/components/ui';
 import { useDeviceReader } from '../../shared/device/useDeviceReader';
 import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
 import type { SetType, WorkoutExerciseState } from '../../shared/api/workoutApi';
-import { colors, spacing, typography } from '../../shared/theme/tokens';
+import { colors, radius, spacing, typography } from '../../shared/theme/tokens';
 import ExerciseCard from './components/ExerciseCard';
 
 type WorkoutNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -64,16 +64,17 @@ export function WorkoutScreen() {
     timerState,
     latestSetSuggestion,
     aiCoachSettings,
+    settings,
     error,
     clearError,
     startEmptyWorkout,
     finishActiveWorkout,
-    resetActiveWorkout,
     completeActiveWorkoutLocal,
     logSetForActiveWorkout,
     patchSetLog,
     minimizeWorkout,
     workoutHistory,
+    setWorkoutScreenVisible,
   } = useWorkoutFlow();
 
   const [draftsByExercise, setDraftsByExercise] = useState<Record<string, DraftSet>>({});
@@ -83,11 +84,53 @@ export function WorkoutScreen() {
   const [selectedExerciseName, setSelectedExerciseName] = useState<string | null>(null);
   const [setTypePicker, setSetTypePicker] = useState<{ exerciseId: string; rowIndex: number } | null>(null);
 
-  const [restDurationSec, setRestDurationSec] = useState(60);
-  const [restRemainingSec, setRestRemainingSec] = useState(60);
+  const [restDurationSec, setRestDurationSec] = useState<number>(Math.max(30, settings.workout.rest_timer_sec || 60));
+  const [restRemainingSec, setRestRemainingSec] = useState<number>(Math.max(30, settings.workout.rest_timer_sec || 60));
   const [restRunning, setRestRunning] = useState(false);
   const [restPickerOpen, setRestPickerOpen] = useState(false);
-  const [customRestInput, setCustomRestInput] = useState('75');
+  const [customRestInput, setCustomRestInput] = useState(String(Math.max(30, settings.workout.rest_timer_sec || 60)));
+
+  useFocusEffect(
+    useCallback(() => {
+      setWorkoutScreenVisible(true);
+      return () => {
+        setWorkoutScreenVisible(false);
+      };
+    }, [setWorkoutScreenVisible])
+  );
+
+  useEffect(() => {
+    if (!currentWorkout) {
+      startEmptyWorkout();
+    }
+  }, [currentWorkout, startEmptyWorkout]);
+
+  useEffect(() => {
+    if (!restRunning) {
+      return;
+    }
+
+    if (restRemainingSec <= 0) {
+      setRestRunning(false);
+      Vibration.vibrate(14);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setRestRemainingSec((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [restRemainingSec, restRunning]);
+
+  useEffect(() => {
+    if (!currentWorkout) {
+      return;
+    }
+
+    setRestDurationSec(Math.max(30, settings.workout.rest_timer_sec || 60));
+    setRestRemainingSec(Math.max(30, settings.workout.rest_timer_sec || 60));
+  }, [currentWorkout?.session.id, settings.workout.rest_timer_sec]);
 
   const exercises = useMemo(() => {
     const list = currentWorkout?.state?.exercises ?? [];
@@ -113,8 +156,6 @@ export function WorkoutScreen() {
     [exercises]
   );
 
-  const progress = Math.min(1, completedSets / Math.max(1, totalRows));
-
   const totalVolume = useMemo(
     () =>
       exercises.reduce(
@@ -136,46 +177,12 @@ export function WorkoutScreen() {
       : 'Motivation Boost';
 
   const startRestTimer = useCallback((seconds: number) => {
-    setRestDurationSec(seconds);
-    setRestRemainingSec(seconds);
+    const safeSeconds = Math.max(15, seconds);
+    setRestDurationSec(safeSeconds);
+    setRestRemainingSec(safeSeconds);
+    setCustomRestInput(String(safeSeconds));
     setRestRunning(true);
   }, []);
-
-  useEffect(() => {
-    if (!restRunning) {
-      return;
-    }
-
-    if (restRemainingSec <= 0) {
-      setRestRunning(false);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setRestRemainingSec((current) => Math.max(0, current - 1));
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, [restRemainingSec, restRunning]);
-
-  useEffect(() => {
-    const subscription = NativeAppState.addEventListener('change', (nextState) => {
-      if (nextState !== 'active') {
-        setRestRunning(false);
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (currentWorkout) {
-      return;
-    }
-    startEmptyWorkout();
-  }, [currentWorkout, startEmptyWorkout]);
 
   useEffect(() => {
     setDraftsByExercise((current) => {
@@ -370,7 +377,8 @@ export function WorkoutScreen() {
   );
 
   const openExerciseLibrary = useCallback(() => {
-    (navigation as any).navigate('ExerciseLibrary');
+    Vibration.vibrate(8);
+    navigation.navigate('ExerciseLibrary');
   }, [navigation]);
 
   const finishWorkout = useCallback(async () => {
@@ -379,15 +387,16 @@ export function WorkoutScreen() {
       return;
     }
 
+    Vibration.vibrate(12);
     try {
       const result = await finishActiveWorkout();
-      (navigation as any).navigate('WorkoutSummary', {
+      navigation.navigate('WorkoutSummary', {
         summary: result.summary,
         nextPlan: result.nextPlan,
       });
       return;
     } catch {
-      // Fall back to local completion for uninterrupted user flow.
+      // Keep the user flow uninterrupted and save a local summary fallback.
     }
 
     const completed = active.state.exercises.reduce(
@@ -402,39 +411,37 @@ export function WorkoutScreen() {
       performance: total > 0 ? completed / total : 0,
     });
 
-    (navigation as any).navigate('MainTabs', { screen: 'Home' });
+    navigation.navigate('MainTabs', { screen: 'Home' });
   }, [completeActiveWorkoutLocal, currentWorkout, finishActiveWorkout, navigation]);
 
-  const onExitWorkout = useCallback(() => {
-    resetActiveWorkout();
-    (navigation as any).navigate('MainTabs', { screen: 'Home' });
-  }, [navigation, resetActiveWorkout]);
-
-  const onMinimize = useCallback(() => {
+  const onBack = useCallback(() => {
+    Vibration.vibrate(8);
     minimizeWorkout();
-    (navigation as any).navigate('MainTabs', { screen: 'Training' });
+    navigation.navigate('MainTabs', { screen: 'Home' });
   }, [minimizeWorkout, navigation]);
 
-  const applySetType = useCallback((type: SetType) => {
-    if (!setTypePicker) {
-      return;
-    }
+  const applySetType = useCallback(
+    (type: SetType) => {
+      if (!setTypePicker) {
+        return;
+      }
 
-    setSetTypesByExercise((current) => ({
-      ...current,
-      [setTypePicker.exerciseId]: {
-        ...(current[setTypePicker.exerciseId] ?? {}),
-        [setTypePicker.rowIndex]: type,
-      },
-    }));
-    setSetTypePicker(null);
-  }, [setTypePicker]);
+      setSetTypesByExercise((current) => ({
+        ...current,
+        [setTypePicker.exerciseId]: {
+          ...(current[setTypePicker.exerciseId] ?? {}),
+          [setTypePicker.rowIndex]: type,
+        },
+      }));
+      setSetTypePicker(null);
+    },
+    [setTypePicker]
+  );
 
   const applyRestPreset = useCallback(
     (seconds: number) => {
-      setRestPickerOpen(false);
       startRestTimer(seconds);
-      setCustomRestInput(String(seconds));
+      setRestPickerOpen(false);
     },
     [startRestTimer]
   );
@@ -461,39 +468,27 @@ export function WorkoutScreen() {
       ? selectedHistory.exercises.find((exercise) => exercise.name === selectedExercise.name) ?? null
       : null;
 
+  const workoutTitle = currentWorkout?.plan.title ?? 'Workout';
+
   return (
     <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
       <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
-        <View style={styles.actionHeader}>
-          <AppButton variant="secondary" style={styles.actionHeaderButton} onPress={onExitWorkout}>
+        <View style={styles.topBar}>
+          <AppButton variant="secondary" style={styles.topBarButton} onPress={onBack}>
             Back
           </AppButton>
-          <Text style={styles.actionHeaderTitle}>Log Workout</Text>
-          <AppButton style={styles.actionHeaderButton} onPress={finishWorkout}>
+          <Text style={styles.topBarTitle} numberOfLines={1}>
+            {workoutTitle}
+          </Text>
+          <AppButton style={styles.topBarButton} onPress={finishWorkout}>
             Finish
           </AppButton>
         </View>
 
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>{currentWorkout?.plan.title ?? 'New Workout'}</Text>
-            <Text style={styles.metaText}>{`${completedSets}/${Math.max(1, totalRows)} sets complete`}</Text>
-          </View>
-
-          <View style={styles.headerRight}>
-            <Pressable
-              onPress={() => setRestPickerOpen(true)}
-              style={[styles.timerPill, restRunning ? styles.timerPillRunning : null]}
-            >
-              <Text style={styles.timerPillText}>{`⏱ ${formatDuration(restRunning ? restRemainingSec : restDurationSec)}`}</Text>
-            </Pressable>
-            <Text style={styles.elapsedText}>{timerState.isRunning ? 'Live' : 'Paused'}</Text>
-          </View>
-        </View>
-
         <View style={styles.mainTimerWrap}>
-          <Text style={styles.mainTimerLabel}>Main Timer</Text>
+          <Text style={styles.mainTimerLabel}>Workout Timer</Text>
           <Text style={styles.mainTimerValue}>{formatDuration(elapsedSeconds)}</Text>
+          <Text style={styles.mainTimerState}>{timerState.isRunning ? 'Live' : 'Paused'}</Text>
         </View>
 
         <View style={styles.statsRow}>
@@ -507,19 +502,27 @@ export function WorkoutScreen() {
           </View>
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Sets</Text>
-            <Text style={styles.statValue}>{String(completedSets)}</Text>
+            <Text style={styles.statValue}>{`${completedSets}/${Math.max(1, totalRows)}`}</Text>
           </View>
         </View>
 
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${Math.max(2, Math.round(progress * 100))}%` }]} />
-        </View>
+        <AppCard style={styles.restCard}>
+          <View style={styles.restHeader}>
+            <Text style={styles.restTitle}>Rest Timer</Text>
+            <AppButton variant="secondary" style={styles.restActionButton} onPress={() => setRestPickerOpen(true)}>
+              Configure
+            </AppButton>
+          </View>
+          <Text style={styles.restCountdown}>{formatDuration(restRunning ? restRemainingSec : restDurationSec)}</Text>
+          <Text style={styles.restMeta}>{restRunning ? 'Running' : 'Ready'}</Text>
+        </AppCard>
 
         {aiCoachSettings.enabled && latestSetSuggestion ? (
           <AppCard style={styles.aiCard}>
             <Text style={styles.aiTitle}>{coachTitle}</Text>
-            <Text style={styles.aiBody}>{latestSetSuggestion.adjustments[0] ?? 'Keep form clean and stay consistent.'}</Text>
-            <Text style={styles.aiMeta}>{`Next: ${latestSetSuggestion.next_weight_kg}kg x ${latestSetSuggestion.next_reps} reps`}</Text>
+            <Text style={styles.aiBody} numberOfLines={2}>
+              {latestSetSuggestion.adjustments[0] ?? 'Keep your form clean and move with control.'}
+            </Text>
           </AppCard>
         ) : null}
 
@@ -535,11 +538,8 @@ export function WorkoutScreen() {
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {!exercises.length ? (
             <AppCard style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>New workout started</Text>
-              <Text style={styles.emptyBody}>Add your first exercise to begin logging sets.</Text>
-              <View style={{ marginTop: spacing.sm }}>
-                <AppButton onPress={openExerciseLibrary}>Add Exercise</AppButton>
-              </View>
+              <Text style={styles.emptyTitle}>Workout is ready</Text>
+              <Text style={styles.emptyBody}>Add your first exercise to start logging sets.</Text>
             </AppCard>
           ) : null}
 
@@ -562,21 +562,15 @@ export function WorkoutScreen() {
                 onPressSetType={(rowIndex) => setSetTypePicker({ exerciseId: exercise.id, rowIndex })}
                 onToggleSet={(rowIndex) => toggleOrAddSet(exercise, rowIndex)}
                 onAddSetRow={() => addSetRow(exercise)}
-                onAddExerciseBelow={openExerciseLibrary}
               />
             );
           })}
         </ScrollView>
 
         <StickyActionBar>
-          <View style={styles.footerActions}>
-            <AppButton variant="secondary" style={styles.footerButton} onPress={openExerciseLibrary}>
-              Add Exercise
-            </AppButton>
-            <AppButton variant="secondary" style={styles.footerButton} onPress={onMinimize}>
-              Minimize
-            </AppButton>
-          </View>
+          <AppButton style={styles.primaryFooterButton} onPress={openExerciseLibrary}>
+            Add Exercise
+          </AppButton>
         </StickyActionBar>
       </View>
 
@@ -590,19 +584,19 @@ export function WorkoutScreen() {
               </AppButton>
             </View>
 
-            <Text style={styles.previewMetaText}>Muscles</Text>
-            <Text style={styles.cardBody}>{selectedExercise?.muscle_group ?? '—'}</Text>
+            <Text style={styles.previewMetaText}>Muscle Group</Text>
+            <Text style={styles.cardBody}>{selectedExercise?.muscle_group ?? '-'}</Text>
 
-            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>Equipment</Text>
-            <Text style={styles.cardBody}>{selectedExercise?.equipment ?? '—'}</Text>
+            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>Equipment</Text>
+            <Text style={styles.cardBody}>{selectedExercise?.equipment ?? '-'}</Text>
 
-            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>Instructions</Text>
+            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>Instructions</Text>
             <Text style={styles.cardBody}>
               {currentWorkout?.plan?.exercises?.find((exercise) => exercise.name === selectedExerciseName)?.coachCue ??
                 'No instruction available.'}
             </Text>
 
-            <Text style={[styles.previewMetaText, { marginTop: spacing.sm }]}>History</Text>
+            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>History</Text>
             {selectedHistoryExercise && selectedHistory ? (
               <Text style={styles.cardBody}>{`${selectedHistoryExercise.sets} sets • ${selectedHistoryExercise.topWeight ?? '-'}kg x ${selectedHistoryExercise.topReps ?? '-'} reps on ${new Date(selectedHistory.completedAt).toDateString()}`}</Text>
             ) : (
@@ -632,34 +626,49 @@ export function WorkoutScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <Text style={styles.modalTitle}>Rest Timer</Text>
-            <View style={{ gap: spacing.xs }}>
-              <AppButton variant="secondary" onPress={() => applyRestPreset(30)}>
-                30 seconds
+            <Text style={styles.restSheetCountdown}>{formatDuration(restRunning ? restRemainingSec : restDurationSec)}</Text>
+
+            <View style={styles.presetRow}>
+              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(30)}>
+                30s
               </AppButton>
-              <AppButton variant="secondary" onPress={() => applyRestPreset(60)}>
-                60 seconds
+              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(60)}>
+                60s
               </AppButton>
-              <AppButton variant="secondary" onPress={() => applyRestPreset(90)}>
-                90 seconds
+              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(90)}>
+                90s
               </AppButton>
             </View>
 
-            <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
-              <Text style={styles.previewMetaText}>Custom seconds</Text>
-              <AppInput value={customRestInput} onChangeText={setCustomRestInput} keyboardType="number-pad" />
-              <AppButton variant="secondary" onPress={applyCustomRest}>
-                Start Custom
-              </AppButton>
-              <AppButton
-                variant="ghost"
-                onPress={() => {
-                  setRestRunning(false);
-                  setRestPickerOpen(false);
-                }}
-              >
-                Stop Timer
-              </AppButton>
-            </View>
+            <Text style={styles.previewMetaText}>Custom seconds</Text>
+            <AppInput value={customRestInput} onChangeText={setCustomRestInput} keyboardType="number-pad" />
+            <AppButton onPress={applyCustomRest}>Start</AppButton>
+
+            {restRunning ? (
+              <View style={styles.restActionsRow}>
+                <AppButton
+                  variant="secondary"
+                  style={styles.restActionHalf}
+                  onPress={() => setRestRunning((current) => !current)}
+                >
+                  {restRunning ? 'Pause' : 'Resume'}
+                </AppButton>
+                <AppButton
+                  variant="ghost"
+                  style={styles.restActionHalf}
+                  onPress={() => {
+                    setRestRunning(false);
+                    setRestRemainingSec(restDurationSec);
+                  }}
+                >
+                  Stop
+                </AppButton>
+              </View>
+            ) : null}
+
+            <AppButton variant="ghost" onPress={() => setRestPickerOpen(false)}>
+              Close
+            </AppButton>
           </View>
         </View>
       </Modal>
@@ -675,80 +684,36 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  actionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  actionHeaderButton: {
-    minHeight: 40,
-    paddingHorizontal: spacing.sm,
-    borderRadius: 10,
-  },
-  actionHeaderTitle: {
-    color: colors.text,
-    fontSize: typography.body,
-    fontWeight: '700',
-    flex: 1,
-    textAlign: 'center',
-  },
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.xs,
+    marginBottom: spacing.md,
   },
-  headerRight: {
-    alignItems: 'flex-end',
-    gap: spacing.xs,
-  },
-  title: {
-    color: colors.text,
-    fontSize: typography.title,
-    fontWeight: '700',
-  },
-  metaText: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-  },
-  elapsedText: {
-    color: colors.mutedText,
-    fontSize: typography.tiny,
-    fontWeight: '700',
-  },
-  timerPill: {
-    minWidth: 96,
-    minHeight: 38,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
+  topBarButton: {
+    minHeight: 42,
+    minWidth: 88,
+    borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
   },
-  timerPillRunning: {
-    borderColor: 'rgba(34,197,94,0.7)',
-    backgroundColor: 'rgba(34,197,94,0.15)',
-  },
-  timerPillText: {
+  topBarTitle: {
     color: colors.text,
-    fontWeight: '700',
-    fontSize: typography.caption,
+    fontSize: typography.body,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
   },
   mainTimerWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 18,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.sm,
+    borderRadius: radius.xl,
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.lg,
+    gap: spacing.xs,
+    marginBottom: spacing.md,
   },
   mainTimerLabel: {
     color: colors.mutedText,
@@ -759,24 +724,29 @@ const styles = StyleSheet.create({
   },
   mainTimerValue: {
     color: colors.text,
-    fontSize: 44,
+    fontSize: 56,
     fontWeight: '800',
-    letterSpacing: -0.8,
+    letterSpacing: -1,
+  },
+  mainTimerState: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '700',
   },
   statsRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   statCard: {
     flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.sm,
-    gap: 2,
+    gap: spacing.xs,
   },
   statLabel: {
     color: colors.mutedText,
@@ -787,51 +757,42 @@ const styles = StyleSheet.create({
   statValue: {
     color: colors.text,
     fontSize: typography.body,
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  progressTrack: {
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: colors.surface,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.sm,
+  restCard: {
+    marginBottom: spacing.md,
   },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#22C55E',
-  },
-  content: {
+  restHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
-    paddingBottom: 150,
   },
-  emptyCard: {
-    padding: spacing.md,
-  },
-  emptyTitle: {
-    color: colors.text,
-    fontSize: typography.subtitle,
-    fontWeight: '700',
-  },
-  emptyBody: {
-    color: colors.mutedText,
-    fontSize: typography.body,
-    marginTop: spacing.xs,
-  },
-  errorCard: {
-    marginBottom: spacing.sm,
-    borderColor: '#5D2632',
-  },
-  errorText: {
+  restTitle: {
     color: colors.text,
     fontSize: typography.caption,
-    lineHeight: 18,
+    fontWeight: '800',
+  },
+  restActionButton: {
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  restCountdown: {
+    color: colors.text,
+    fontSize: 34,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  restMeta: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '700',
   },
   aiCard: {
-    marginBottom: spacing.sm,
-    borderColor: 'rgba(52,199,89,0.4)',
-    backgroundColor: 'rgba(52,199,89,0.1)',
+    marginBottom: spacing.md,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   aiTitle: {
     color: colors.text,
@@ -839,31 +800,47 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   aiBody: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    lineHeight: 18,
+  },
+  errorCard: {
+    marginBottom: spacing.md,
+  },
+  errorText: {
     color: colors.text,
     fontSize: typography.caption,
     lineHeight: 18,
   },
-  aiMeta: {
+  content: {
+    gap: spacing.md,
+    paddingBottom: 140,
+  },
+  emptyCard: {
+    padding: spacing.md,
+  },
+  emptyTitle: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '800',
+  },
+  emptyBody: {
     color: colors.mutedText,
-    fontSize: typography.tiny,
-    fontWeight: '700',
+    fontSize: typography.caption,
+    marginTop: spacing.xs,
   },
-  footerActions: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  footerButton: {
-    flex: 1,
+  primaryFooterButton: {
+    minHeight: 54,
   },
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: '#000000A6',
+    backgroundColor: '#000000CC',
   },
   modalSheet: {
-    maxHeight: '82%',
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    maxHeight: '86%',
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
     borderBottomWidth: 0,
@@ -882,21 +859,45 @@ const styles = StyleSheet.create({
   modalTitle: {
     color: colors.text,
     fontSize: typography.subtitle,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   smallCloseButton: {
-    minHeight: 36,
-    paddingHorizontal: 10,
-    alignSelf: 'flex-end',
-    borderRadius: 10,
+    minHeight: 40,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
   },
   previewMetaText: {
     color: colors.mutedText,
     fontSize: typography.tiny,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
   cardBody: {
     color: colors.text,
     fontSize: typography.body,
-    lineHeight: 20,
+    lineHeight: 22,
+  },
+  restSheetCountdown: {
+    color: colors.text,
+    fontSize: 40,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: -0.6,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  presetButton: {
+    flex: 1,
+    minHeight: 48,
+  },
+  restActionsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  restActionHalf: {
+    flex: 1,
+    minHeight: 48,
   },
 });

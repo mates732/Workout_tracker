@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -43,11 +43,13 @@ export function TrainingScreen() {
   const recent = useMemo(() => workoutHistory.slice(0, 4), [workoutHistory]);
 
   const startBlank = () => {
+    Vibration.vibrate(8);
     startEmptyWorkout();
     navigation.navigate('ActiveWorkout');
   };
 
   const resumeWorkout = () => {
+    Vibration.vibrate(8);
     startOrResumeWorkout();
     navigation.navigate('ActiveWorkout');
   };
@@ -58,6 +60,7 @@ export function TrainingScreen() {
       return;
     }
 
+    Vibration.vibrate(8);
     startPlannedWorkout(routine);
     navigation.navigate('ActiveWorkout');
   };
@@ -67,23 +70,19 @@ export function TrainingScreen() {
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.title}>Training</Text>
-          <Text style={styles.subtitle}>Start a blank workout, launch routines, or review your training history.</Text>
+          <Text style={styles.subtitle}>Routines and history in one clean flow.</Text>
         </View>
 
         <AppCard style={styles.primaryCard}>
           <Text style={styles.sectionTitle}>Start New Training</Text>
-          <Text style={styles.sectionBody}>Use Blank Workout for fast logging, then add exercises from library in one tap.</Text>
           <AppButton style={styles.cardButton} onPress={startBlank}>
-            Blank Workout
+            Start Blank Workout
           </AppButton>
-          <AppButton
-            variant="secondary"
-            style={styles.cardButton}
-            onPress={resumeWorkout}
-            disabled={!currentWorkout}
-          >
-            {currentWorkout ? 'Resume Active Workout' : 'No Active Workout'}
-          </AppButton>
+          {currentWorkout ? (
+            <AppButton variant="secondary" style={styles.cardButton} onPress={resumeWorkout}>
+              Resume Workout
+            </AppButton>
+          ) : null}
         </AppCard>
 
         <AppCard>
@@ -95,7 +94,11 @@ export function TrainingScreen() {
           </View>
           {routines.length ? (
             routines.map((routine, index) => (
-              <Pressable key={`${routine.date}-${routine.preview.id}-${index}`} style={styles.routineRow} onPress={() => openRoutine(index)}>
+              <Pressable
+                key={`${routine.date}-${routine.preview.id}-${index}`}
+                style={styles.routineRow}
+                onPress={() => openRoutine(index)}
+              >
                 <View style={styles.routineCopy}>
                   <Text style={styles.routineTitle}>{routine.preview.title}</Text>
                   <Text style={styles.routineMeta}>{`${routine.preview.exercises.length} exercises • ${routine.preview.estimatedDurationMin} min`}</Text>
@@ -146,7 +149,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   header: {
-    gap: 4,
+    gap: spacing.xs,
   },
   title: {
     color: colors.text,
@@ -158,7 +161,7 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
   },
   primaryCard: {
-    backgroundColor: colors.surfaceStrong,
+    backgroundColor: colors.surface,
     ...shadows.soft,
   },
   sectionTitle: {
@@ -166,13 +169,8 @@ const styles = StyleSheet.create({
     fontSize: typography.body,
     fontWeight: '700',
   },
-  sectionBody: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    lineHeight: 18,
-  },
   cardButton: {
-    minHeight: 48,
+    minHeight: 52,
   },
   rowBetween: {
     flexDirection: 'row',
@@ -181,17 +179,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   inlineButton: {
-    minHeight: 32,
+    minHeight: 40,
     borderRadius: radius.sm,
     paddingHorizontal: spacing.sm,
   },
   routineRow: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.backgroundElevated,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -200,10 +198,10 @@ const styles = StyleSheet.create({
   historyRow: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.backgroundElevated,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
