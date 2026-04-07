@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Frontend (Expo) - Mobile",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "port": 8081,
+      "cwd": "vpulz_mobile"
+    },
+    {
+      "name": "Backend (FastAPI)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "core.app:app", "--reload", "--port", "8100"],
+      "port": 8100,
+      "cwd": "vpulz"
+    }
+  ]
+}

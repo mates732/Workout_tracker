@@ -1,7 +1,7 @@
 {
   "name": "tracker-vpulz",
   "private": true,
-  "main": "expo/AppEntry",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
