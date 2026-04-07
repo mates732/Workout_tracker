@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from vpulz.backend.repositories.memory_repo import WorkoutRepository
-from vpulz.backend.schemas.api import AddExerciseRequest, LogSetRequest, StartWorkoutRequest
-from vpulz.backend.services.workout_logging import WorkoutLoggingService
+from backend.repositories.memory_repo import WorkoutRepository
+from backend.schemas.api import AddExerciseRequest, LogSetRequest, StartWorkoutRequest
+from backend.services.workout_logging import WorkoutLoggingService
 
 router = APIRouter(prefix="/workouts", tags=["workouts"])
 repo = WorkoutRepository()

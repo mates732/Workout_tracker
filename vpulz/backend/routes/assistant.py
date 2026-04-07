@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from vpulz.backend.ai.orchestrator import AIOrchestrator
-from vpulz.backend.ai.providers import FastInferenceProvider, ReasoningProvider
-from vpulz.backend.ai.retrieval import KnowledgeRetriever
-from vpulz.backend.models.domain import UserProfile
-from vpulz.backend.repositories.memory_repo import RoutineRepository, WorkoutRepository
-from vpulz.backend.schemas.api import AssistantRequest
-from vpulz.backend.services.progress import ProgressService
+from backend.ai.orchestrator import AIOrchestrator
+from backend.ai.providers import FastInferenceProvider, ReasoningProvider
+from backend.ai.retrieval import KnowledgeRetriever
+from backend.models.domain import UserProfile
+from backend.repositories.memory_repo import RoutineRepository, WorkoutRepository
+from backend.schemas.api import AssistantRequest
+from backend.services.progress import ProgressService
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 

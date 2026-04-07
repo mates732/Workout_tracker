@@ -1,11 +1,11 @@
-from vpulz.backend.ai.orchestrator import AIOrchestrator
-from vpulz.backend.ai.providers import FastInferenceProvider, ReasoningProvider
-from vpulz.backend.ai.retrieval import KnowledgeRetriever
-from vpulz.backend.models.domain import UserProfile
-from vpulz.backend.repositories.memory_repo import RoutineRepository, WorkoutRepository
-from vpulz.backend.services.progress import ProgressService
-from vpulz.backend.services.routines import RoutineService
-from vpulz.backend.services.workout_logging import WorkoutLoggingService
+from backend.ai.orchestrator import AIOrchestrator
+from backend.ai.providers import FastInferenceProvider, ReasoningProvider
+from backend.ai.retrieval import KnowledgeRetriever
+from backend.models.domain import UserProfile
+from backend.repositories.memory_repo import RoutineRepository, WorkoutRepository
+from backend.services.progress import ProgressService
+from backend.services.routines import RoutineService
+from backend.services.workout_logging import WorkoutLoggingService
 
 
 def test_workout_logging_flow() -> None:

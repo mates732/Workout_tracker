@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from statistics import mean
 
-from vpulz.backend.models.domain import Workout
+from backend.models.domain import Workout
 
 
 def estimated_1rm(weight: float, reps: int) -> float:

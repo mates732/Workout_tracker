@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from vpulz.backend.models.domain import Routine, UserProfile
-from vpulz.backend.repositories.memory_repo import RoutineRepository
+from backend.models.domain import Routine, UserProfile
+from backend.repositories.memory_repo import RoutineRepository
 
 
 class RoutineService:

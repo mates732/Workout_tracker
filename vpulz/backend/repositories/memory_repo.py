@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
-from vpulz.backend.models.domain import ExerciseEntry, Routine, SetLog, Workout
+from backend.models.domain import ExerciseEntry, Routine, SetLog, Workout
 
 
 @dataclass
