@@ -1,6 +1,6 @@
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import {
   Alert,
   Pressable,
@@ -30,11 +30,16 @@ const SET_LABEL: Record<SetType, string> = {
   failure: "F",
 };
 
+const SET_LABEL_COLOR: Record<SetType, string> = {
+  normal: palette.textDim,
+  warmup: "#4A90F0",
+  dropset: "#FBBC04",
+  failure: palette.danger,
+};
+
 function parseInput(value: string): number {
   const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
+  if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, parsed);
 }
 
@@ -42,12 +47,7 @@ type SetRowProps = {
   exercise: WorkoutExercise;
   setItem: WorkoutSet;
   index: number;
-  onUpdateSet: (
-    exerciseId: string,
-    setId: string,
-    field: "kg" | "reps",
-    value: number
-  ) => void;
+  onUpdateSet: (exerciseId: string, setId: string, field: "kg" | "reps", value: number) => void;
   onToggleSet: (exerciseId: string, setId: string) => void;
   onRemoveSet: (exerciseId: string, setId: string) => void;
   onCycleSetType: (exerciseId: string, setId: string) => void;
@@ -62,37 +62,42 @@ function SetRow({
   onRemoveSet,
   onCycleSetType,
 }: SetRowProps): React.JSX.Element {
-  const completedStyle = setItem.completed ? styles.setInputCompleted : undefined;
+  const labelColor = SET_LABEL_COLOR[setItem.type];
+  const isNormal = setItem.type === "normal";
 
   return (
     <View style={[styles.setRow, setItem.completed && styles.setRowCompleted]}>
       <Pressable
-        style={styles.setTypeButton}
+        style={[styles.setTypeButton, !isNormal && { borderColor: `${labelColor}60` }]}
         onPress={() => onCycleSetType(exercise.id, setItem.id)}
       >
-        <Text style={styles.setTypeText}>{SET_LABEL[setItem.type] ?? String(index + 1)}</Text>
+        <Text style={[styles.setTypeText, { color: isNormal ? palette.textDim : labelColor }]}>
+          {isNormal ? String(index + 1) : SET_LABEL[setItem.type]}
+        </Text>
       </Pressable>
 
       <Text style={styles.previousText}>
-        {setItem.previous ? `${setItem.previous.kg}x${setItem.previous.reps}` : "-"}
+        {setItem.previous ? `${setItem.previous.kg}×${setItem.previous.reps}` : "—"}
       </Text>
 
       <TextInput
-        style={[styles.setInput, completedStyle]}
-        defaultValue={String(setItem.kg)}
+        style={[styles.setInput, setItem.completed && styles.setInputCompleted]}
+        defaultValue={setItem.kg > 0 ? String(setItem.kg) : ""}
         keyboardType="decimal-pad"
-        onEndEditing={(event) =>
-          onUpdateSet(exercise.id, setItem.id, "kg", parseInput(event.nativeEvent.text))
-        }
+        placeholder="0"
+        placeholderTextColor={palette.textDim}
+        onEndEditing={(e) => onUpdateSet(exercise.id, setItem.id, "kg", parseInput(e.nativeEvent.text))}
+        returnKeyType="next"
       />
 
       <TextInput
-        style={[styles.setInput, completedStyle]}
-        defaultValue={String(setItem.reps)}
+        style={[styles.setInput, setItem.completed && styles.setInputCompleted]}
+        defaultValue={setItem.reps > 0 ? String(setItem.reps) : ""}
         keyboardType="number-pad"
-        onEndEditing={(event) =>
-          onUpdateSet(exercise.id, setItem.id, "reps", parseInput(event.nativeEvent.text))
-        }
+        placeholder="0"
+        placeholderTextColor={palette.textDim}
+        onEndEditing={(e) => onUpdateSet(exercise.id, setItem.id, "reps", parseInput(e.nativeEvent.text))}
+        returnKeyType="done"
       />
 
       <Pressable
@@ -100,7 +105,7 @@ function SetRow({
         onPress={() => onToggleSet(exercise.id, setItem.id)}
       >
         <Text style={[styles.doneButtonText, setItem.completed && styles.doneButtonTextActive]}>
-          {setItem.completed ? "OK" : "--"}
+          {setItem.completed ? "✓" : "○"}
         </Text>
       </Pressable>
 
@@ -108,7 +113,7 @@ function SetRow({
         style={styles.deleteButton}
         onPress={() => onRemoveSet(exercise.id, setItem.id)}
       >
-        <Text style={styles.deleteButtonText}>Del</Text>
+        <Text style={styles.deleteButtonText}>✕</Text>
       </Pressable>
     </View>
   );
@@ -137,19 +142,34 @@ export default function WorkoutSessionScreen(): React.JSX.Element {
   useFocusEffect(
     useCallback(() => {
       setWorkoutScreenActive(true);
-      return () => {
-        setWorkoutScreenActive(false);
-      };
+      return () => setWorkoutScreenActive(false);
     }, [setWorkoutScreenActive])
   );
 
-  const openExerciseLibrary = (): void => {
-    navigation.navigate("ExerciseLibrary");
-  };
+  // Live volume: sum of completed sets
+  const liveVolume = useMemo(() => {
+    if (!workout) return 0;
+    let vol = 0;
+    for (const ex of workout.exercises) {
+      for (const s of ex.sets) {
+        if (s.completed) vol += s.kg * s.reps;
+      }
+    }
+    return Math.round(vol);
+  }, [workout]);
 
-  const closeToHome = (): void => {
-    navigation.navigate("Home");
-  };
+  const completedSets = useMemo(() => {
+    if (!workout) return 0;
+    return workout.exercises.reduce((acc, ex) => acc + ex.sets.filter((s) => s.completed).length, 0);
+  }, [workout]);
+
+  const totalSets = useMemo(() => {
+    if (!workout) return 0;
+    return workout.exercises.reduce((acc, ex) => acc + ex.sets.length, 0);
+  }, [workout]);
+
+  const openExerciseLibrary = (): void => navigation.navigate("ExerciseLibrary");
+  const closeToHome = (): void => navigation.navigate("Home");
 
   const onFinish = (): void => {
     Alert.alert("Finish workout?", "This will save and end the session.", [
@@ -184,8 +204,8 @@ export default function WorkoutSessionScreen(): React.JSX.Element {
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No active workout</Text>
           <Text style={styles.emptyBody}>Start a workout from Home first.</Text>
-          <Pressable style={styles.primaryButton} onPress={closeToHome}>
-            <Text style={styles.primaryButtonText}>Back to Home</Text>
+          <Pressable style={styles.secondaryButton} onPress={closeToHome}>
+            <Text style={styles.secondaryButtonText}>Back to Home</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -194,23 +214,42 @@ export default function WorkoutSessionScreen(): React.JSX.Element {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      {/* Top bar */}
       <View style={styles.topRow}>
-        <Pressable style={styles.secondaryButton} onPress={closeToHome}>
-          <Text style={styles.secondaryButtonText}>Back</Text>
+        <Pressable style={styles.backButton} onPress={closeToHome}>
+          <Text style={styles.backButtonText}>‹ Home</Text>
         </Pressable>
-        <Pressable style={styles.primaryButton} onPress={openExerciseLibrary}>
-          <Text style={styles.primaryButtonText}>Exercise Library</Text>
+        <Text style={styles.workoutTitle} numberOfLines={1}>{workout.title}</Text>
+        <Pressable style={styles.addExButton} onPress={openExerciseLibrary}>
+          <Text style={styles.addExButtonText}>+ Exercise</Text>
         </Pressable>
       </View>
 
+      {/* Timer card */}
       <View style={styles.timerCard}>
-        <Text style={styles.timerLabel}>Workout Timer</Text>
-        <Text style={styles.timerValue}>{formatDuration(timerElapsedSec)}</Text>
+        <View style={styles.timerMain}>
+          <View style={styles.timerBlock}>
+            <Text style={styles.timerLabel}>TIME</Text>
+            <Text style={styles.timerValue}>{formatDuration(timerElapsedSec)}</Text>
+          </View>
+          <View style={styles.timerDivider} />
+          <View style={styles.timerBlock}>
+            <Text style={styles.timerLabel}>VOLUME</Text>
+            <Text style={styles.timerValue}>{liveVolume > 0 ? `${liveVolume}kg` : "—"}</Text>
+          </View>
+          <View style={styles.timerDivider} />
+          <View style={styles.timerBlock}>
+            <Text style={styles.timerLabel}>SETS</Text>
+            <Text style={styles.timerValue}>{completedSets}/{totalSets}</Text>
+          </View>
+        </View>
         <Pressable
           style={[styles.timerToggle, timerRunning ? styles.stopButton : styles.startButton]}
           onPress={timerRunning ? stopTimer : startTimer}
         >
-          <Text style={styles.timerToggleText}>{timerRunning ? "Stop" : "Start"}</Text>
+          <Text style={[styles.timerToggleText, timerRunning ? styles.stopText : styles.startText]}>
+            {timerRunning ? "⏸ Pause" : "▶ Resume"}
+          </Text>
         </Pressable>
       </View>
 
@@ -234,17 +273,17 @@ export default function WorkoutSessionScreen(): React.JSX.Element {
               style={styles.notesInput}
               value={exercise.notes}
               onChangeText={(value) => updateExerciseNotes(exercise.id, value)}
-              placeholder="Add notes for this exercise"
+              placeholder="Add notes…"
               placeholderTextColor={palette.textDim}
             />
 
             <View style={styles.setHeaderRow}>
-              <Text style={styles.setHeaderCell}>SET</Text>
-              <Text style={styles.setHeaderCell}>PREV</Text>
-              <Text style={styles.setHeaderCell}>KG</Text>
-              <Text style={styles.setHeaderCell}>REPS</Text>
-              <Text style={styles.setHeaderCell}>DONE</Text>
-              <Text style={styles.setHeaderCell}>DEL</Text>
+              <Text style={[styles.setHeaderCell, { flex: 1 }]}>SET</Text>
+              <Text style={[styles.setHeaderCell, { flex: 1.4 }]}>PREV</Text>
+              <Text style={[styles.setHeaderCell, { flex: 1 }]}>KG</Text>
+              <Text style={[styles.setHeaderCell, { flex: 1 }]}>REPS</Text>
+              <Text style={[styles.setHeaderCell, { flex: 1 }]}>DONE</Text>
+              <Text style={[styles.setHeaderCell, { flex: 0.7 }]}></Text>
             </View>
 
             {exercise.sets.map((setItem, index) => (
@@ -261,15 +300,19 @@ export default function WorkoutSessionScreen(): React.JSX.Element {
             ))}
 
             <Pressable style={styles.addSetButton} onPress={() => addSetRow(exercise.id)}>
-              <Text style={styles.addSetText}>+ Add set</Text>
+              <Text style={styles.addSetText}>+ Add Set</Text>
             </Pressable>
           </View>
         ))}
 
+        {workout.exercises.length === 0 && (
+          <View style={styles.noExercisesState}>
+            <Text style={styles.noExercisesTitle}>No exercises yet</Text>
+            <Text style={styles.noExercisesBody}>Add exercises from the library above.</Text>
+          </View>
+        )}
+
         <View style={styles.footerActions}>
-          <Pressable style={styles.primaryButton} onPress={openExerciseLibrary}>
-            <Text style={styles.primaryButtonText}>Workout to Exercise Library</Text>
-          </Pressable>
           <Pressable style={styles.finishButton} onPress={onFinish}>
             <Text style={styles.finishButtonText}>Finish Workout</Text>
           </Pressable>
@@ -287,66 +330,117 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.bgDeep,
   },
+  // ── Top bar ───────────────────────────────────────────────────────────────────
   topRow: {
     flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
   },
+  backButton: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm,
+    justifyContent: "center",
+  },
+  backButtonText: {
+    color: palette.accent,
+    fontSize: typography.body,
+    fontWeight: "700",
+  },
+  workoutTitle: {
+    flex: 1,
+    color: palette.text,
+    fontSize: typography.body,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  addExButton: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: palette.accentBorder,
+    backgroundColor: palette.accentBg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addExButtonText: {
+    color: palette.accentLight,
+    fontSize: typography.caption,
+    fontWeight: "800",
+  },
+  // ── Timer card ────────────────────────────────────────────────────────────────
   timerCard: {
-    marginTop: spacing.sm,
     marginHorizontal: spacing.md,
-    paddingVertical: spacing.lg,
+    marginBottom: spacing.xs,
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: palette.cardBorder,
     backgroundColor: palette.card,
+    gap: spacing.sm,
+  },
+  timerMain: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.xs,
+    justifyContent: "space-around",
+  },
+  timerBlock: {
+    flex: 1,
+    alignItems: "center",
+    gap: 2,
+  },
+  timerDivider: {
+    width: 1,
+    height: 36,
+    backgroundColor: palette.cardBorder,
   },
   timerLabel: {
     color: palette.textDim,
-    fontSize: typography.caption,
+    fontSize: typography.tiny,
     fontWeight: "800",
     letterSpacing: 0.8,
     textTransform: "uppercase",
   },
   timerValue: {
     color: palette.text,
-    fontSize: 50,
+    fontSize: 22,
     fontWeight: "900",
+    letterSpacing: -0.5,
     textAlign: "center",
   },
   timerToggle: {
-    minHeight: 44,
-    minWidth: 120,
+    minHeight: 40,
     borderRadius: radius.sm,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: spacing.md,
   },
   startButton: {
     backgroundColor: palette.accentBg,
-    borderColor: "rgba(249,246,238,0.36)",
+    borderColor: palette.accentBorder,
   },
   stopButton: {
-    backgroundColor: "rgba(224,90,58,0.18)",
-    borderColor: "rgba(224,90,58,0.50)",
+    backgroundColor: "rgba(124,106,245,0.08)",
+    borderColor: "rgba(124,106,245,0.30)",
   },
   timerToggleText: {
-    color: palette.text,
     fontSize: typography.body,
     fontWeight: "800",
   },
+  startText: { color: palette.accentLight },
+  stopText: { color: palette.textMuted },
+  // ── Content ───────────────────────────────────────────────────────────────────
   content: {
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    paddingTop: spacing.sm,
     gap: spacing.md,
     paddingBottom: spacing.xl,
   },
+  // ── Exercise card ─────────────────────────────────────────────────────────────
   exerciseCard: {
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -361,9 +455,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: spacing.sm,
   },
-  exerciseCopy: {
-    flex: 1,
-  },
+  exerciseCopy: { flex: 1 },
   exerciseTitle: {
     color: palette.text,
     fontSize: typography.subtitle,
@@ -375,10 +467,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   removeExerciseButton: {
-    minHeight: 34,
+    minHeight: 32,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: "rgba(224,90,58,0.50)",
+    borderColor: palette.dangerBorder,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.sm,
@@ -389,37 +481,37 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   notesInput: {
-    minHeight: 40,
+    minHeight: 38,
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: palette.cardBorder,
-    backgroundColor: "rgba(0,0,0,0.20)",
+    backgroundColor: "rgba(0,0,0,0.25)",
     color: palette.text,
-    fontSize: typography.body,
+    fontSize: typography.caption,
     paddingHorizontal: spacing.sm,
   },
+  // ── Set table ─────────────────────────────────────────────────────────────────
   setHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    paddingHorizontal: 2,
   },
   setHeaderCell: {
-    flex: 1,
     textAlign: "center",
     color: palette.textDim,
     fontSize: typography.tiny,
     fontWeight: "800",
-    letterSpacing: 0.7,
+    letterSpacing: 0.6,
   },
   setRow: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: radius.sm,
-    paddingVertical: spacing.xs,
+    paddingVertical: 3,
     gap: 3,
   },
   setRowCompleted: {
-    backgroundColor: palette.successBg,
+    backgroundColor: "rgba(74,222,128,0.07)",
   },
   setTypeButton: {
     flex: 1,
@@ -431,15 +523,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   setTypeText: {
-    color: palette.text,
     fontSize: typography.caption,
-    fontWeight: "800",
+    fontWeight: "900",
   },
   previousText: {
-    flex: 1,
+    flex: 1.4,
     color: palette.textDim,
     textAlign: "center",
-    fontSize: typography.caption,
+    fontSize: typography.tiny,
   },
   setInput: {
     flex: 1,
@@ -451,7 +542,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: typography.body,
     fontWeight: "700",
-    backgroundColor: "rgba(0,0,0,0.20)",
+    backgroundColor: "rgba(0,0,0,0.25)",
   },
   setInputCompleted: {
     borderColor: palette.success,
@@ -472,61 +563,80 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   doneButtonText: {
-    color: palette.textMuted,
-    fontSize: typography.caption,
-    fontWeight: "800",
+    color: palette.textDim,
+    fontSize: 16,
+    fontWeight: "900",
   },
   doneButtonTextActive: {
-    color: palette.bgDeep,
+    color: "#0B0B0F",
   },
   deleteButton: {
-    flex: 1,
+    flex: 0.7,
     minHeight: 38,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: "rgba(224,90,58,0.50)",
+    borderColor: palette.dangerBorder,
     alignItems: "center",
     justifyContent: "center",
   },
   deleteButtonText: {
     color: palette.danger,
-    fontSize: typography.caption,
+    fontSize: 11,
     fontWeight: "700",
   },
   addSetButton: {
     minHeight: 42,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: palette.cardBorder,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderStyle: "dashed",
     alignItems: "center",
     justifyContent: "center",
+    marginTop: 2,
   },
   addSetText: {
     color: palette.textMuted,
     fontSize: typography.body,
     fontWeight: "700",
   },
+  // ── Empty state ───────────────────────────────────────────────────────────────
+  noExercisesState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.xl * 2,
+    gap: spacing.xs,
+  },
+  noExercisesTitle: {
+    color: palette.textMuted,
+    fontSize: typography.subtitle,
+    fontWeight: "800",
+  },
+  noExercisesBody: {
+    color: palette.textDim,
+    fontSize: typography.body,
+    textAlign: "center",
+  },
+  // ── Footer actions ────────────────────────────────────────────────────────────
   footerActions: {
     gap: spacing.sm,
-    marginTop: spacing.xs,
   },
   primaryButton: {
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: "rgba(249,246,238,0.34)",
+    borderColor: palette.accentBorder,
     backgroundColor: palette.accentBg,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.md,
   },
   primaryButtonText: {
-    color: palette.text,
+    color: palette.accentLight,
     fontSize: typography.body,
     fontWeight: "800",
   },
   secondaryButton: {
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: palette.cardBorder,
@@ -541,11 +651,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   finishButton: {
-    minHeight: 48,
+    minHeight: 50,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: "rgba(175,225,175,0.62)",
-    backgroundColor: "rgba(175,225,175,0.18)",
+    borderColor: "rgba(74,222,128,0.45)",
+    backgroundColor: "rgba(74,222,128,0.12)",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.md,
@@ -559,7 +669,8 @@ const styles = StyleSheet.create({
     minHeight: 44,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: "rgba(224,90,58,0.50)",
+    borderColor: palette.dangerBorder,
+    backgroundColor: palette.dangerBg,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.md,
@@ -569,6 +680,7 @@ const styles = StyleSheet.create({
     fontSize: typography.body,
     fontWeight: "700",
   },
+  // ── Empty workout state ───────────────────────────────────────────────────────
   emptyState: {
     flex: 1,
     alignItems: "center",

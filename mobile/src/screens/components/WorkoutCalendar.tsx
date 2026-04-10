@@ -1,87 +1,114 @@
 import React, { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { palette, radius, spacing, typography } from "../../theme/workoutLoggerTheme";
-import {
-  addMonths,
-  buildMonthGrid,
-  formatMonthYear,
-  toDateKey,
-} from "../../utils/workoutLoggerDate";
+import type { DayInfo, SplitType } from "../../state/WorkoutLoggerContext";
+import { palette, radius, spacing, splitColors, todayColor, typography } from "../../theme/workoutLoggerTheme";
+import { addMonths, buildMonthGrid, formatMonthYear, toDateKey } from "../../utils/workoutLoggerDate";
 
 type WorkoutCalendarProps = {
   monthDate: Date;
   selectedDate: string;
-  highlightedDates: string[];
+  calendarDays: Record<string, DayInfo>;
   onSelectDate: (dateKey: string) => void;
   onChangeMonth: (monthDate: Date) => void;
 };
 
 const WEEK_DAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
+function getSplitDotColor(split: SplitType, status: "future" | "completed" | "missed" | "sick"): string {
+  if (status === "future") return splitColors[split].bright;
+  if (status === "completed") return splitColors[split].dark;
+  return "rgba(255,255,255,0.15)"; // missed / sick
+}
+
 export default function WorkoutCalendar({
   monthDate,
   selectedDate,
-  highlightedDates,
+  calendarDays,
   onSelectDate,
   onChangeMonth,
 }: WorkoutCalendarProps): React.JSX.Element {
   const cells = useMemo(() => buildMonthGrid(monthDate), [monthDate]);
-  const highlightSet = useMemo(() => new Set(highlightedDates), [highlightedDates]);
   const today = toDateKey(new Date());
 
   return (
     <View style={styles.container}>
+      {/* Month navigation */}
       <View style={styles.headerRow}>
-        <Pressable
-          style={styles.monthButton}
-          onPress={() => onChangeMonth(addMonths(monthDate, -1))}
-        >
-          <Text style={styles.monthButtonLabel}>{"<"}</Text>
+        <Pressable style={styles.monthButton} onPress={() => onChangeMonth(addMonths(monthDate, -1))}>
+          <Text style={styles.monthButtonLabel}>{"‹"}</Text>
         </Pressable>
-
         <Text style={styles.monthLabel}>{formatMonthYear(monthDate)}</Text>
-
-        <Pressable
-          style={styles.monthButton}
-          onPress={() => onChangeMonth(addMonths(monthDate, 1))}
-        >
-          <Text style={styles.monthButtonLabel}>{">"}</Text>
+        <Pressable style={styles.monthButton} onPress={() => onChangeMonth(addMonths(monthDate, 1))}>
+          <Text style={styles.monthButtonLabel}>{"›"}</Text>
         </Pressable>
       </View>
 
+      {/* Week day header */}
       <View style={styles.weekHeader}>
-        {WEEK_DAYS.map((day) => (
-          <Text key={day} style={styles.weekDay}>
+        {WEEK_DAYS.map((day, i) => (
+          <Text key={`wd-${i}`} style={styles.weekDay}>
             {day}
           </Text>
         ))}
       </View>
 
+      {/* Day grid */}
       <View style={styles.grid}>
         {cells.map((cell, index) => {
-          if (!cell) {
-            return <View key={`empty-${index}`} style={styles.emptyCell} />;
-          }
+          if (!cell) return <View key={`empty-${index}`} style={styles.emptyCell} />;
 
-          const isSelected = cell.dateKey === selectedDate;
           const isToday = cell.dateKey === today;
-          const hasWorkout = highlightSet.has(cell.dateKey);
+          const isSelected = cell.dateKey === selectedDate;
+          const dayInfo = calendarDays[cell.dateKey];
 
           return (
             <Pressable
               key={cell.dateKey}
-              style={[
-                styles.dayCell,
-                isSelected && styles.dayCellSelected,
-                isToday && styles.dayCellToday,
-              ]}
+              style={[styles.dayCell, isSelected && !isToday && styles.dayCellSelected]}
               onPress={() => onSelectDate(cell.dateKey)}
             >
-              <Text style={[styles.dayNumber, isSelected && styles.dayNumberSelected]}>{cell.day}</Text>
-              {hasWorkout ? <View style={styles.dot} /> : <View style={styles.dotPlaceholder} />}
+              {/* Date number with today indicator */}
+              <View style={[styles.dayCircle, isToday && styles.dayCircleToday]}>
+                <Text
+                  style={[
+                    styles.dayNumber,
+                    isToday && styles.dayNumberToday,
+                    !isToday && isSelected && styles.dayNumberSelected,
+                  ]}
+                >
+                  {cell.day}
+                </Text>
+              </View>
+
+              {/* Split color dot */}
+              {dayInfo ? (
+                <View
+                  style={[
+                    styles.splitDot,
+                    { backgroundColor: getSplitDotColor(dayInfo.split, dayInfo.status) },
+                    dayInfo.status === "completed" && styles.splitDotCompleted,
+                  ]}
+                />
+              ) : (
+                <View style={styles.dotPlaceholder} />
+              )}
             </Pressable>
           );
         })}
+      </View>
+
+      {/* Legend */}
+      <View style={styles.legend}>
+        {(["push", "pull", "legs"] as SplitType[]).map((split) => (
+          <View key={split} style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: splitColors[split].bright }]} />
+            <Text style={styles.legendLabel}>{split.charAt(0).toUpperCase() + split.slice(1)}</Text>
+          </View>
+        ))}
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, { backgroundColor: splitColors.legs.dark }]} />
+          <Text style={styles.legendLabel}>Done</Text>
+        </View>
       </View>
     </View>
   );
@@ -96,22 +123,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: spacing.sm,
-    gap: spacing.sm,
   },
   monthButton: {
-    minWidth: 36,
-    minHeight: 32,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: palette.cardBorder,
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.05)",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
   },
   monthButtonLabel: {
     color: palette.text,
-    fontSize: typography.body,
-    fontWeight: "800",
+    fontSize: 20,
+    fontWeight: "600",
+    lineHeight: 24,
   },
   monthLabel: {
     color: palette.text,
@@ -130,6 +157,7 @@ const styles = StyleSheet.create({
     fontSize: typography.tiny,
     fontWeight: "800",
     letterSpacing: 0.6,
+    textTransform: "uppercase",
   },
   grid: {
     flexDirection: "row",
@@ -144,35 +172,72 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: radius.md,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: "transparent",
+    gap: 2,
   },
   dayCellSelected: {
-    backgroundColor: palette.accentBg,
-    borderColor: "rgba(249,246,238,0.34)",
+    borderColor: "rgba(124,106,245,0.40)",
+    backgroundColor: "rgba(124,106,245,0.10)",
   },
-  dayCellToday: {
-    borderColor: "rgba(249,246,238,0.55)",
+  dayCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dayCircleToday: {
+    backgroundColor: todayColor,
   },
   dayNumber: {
     color: palette.textMuted,
     fontSize: typography.caption,
-    fontWeight: "700",
+    fontWeight: "600",
+  },
+  dayNumberToday: {
+    color: "#FFFFFF",
+    fontWeight: "800",
   },
   dayNumberSelected: {
     color: palette.text,
+    fontWeight: "800",
   },
-  dot: {
+  splitDot: {
     width: 6,
     height: 6,
-    borderRadius: radius.pill,
-    backgroundColor: palette.success,
-    marginTop: 4,
+    borderRadius: 3,
+  },
+  splitDotCompleted: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
   dotPlaceholder: {
     width: 6,
     height: 6,
-    marginTop: 4,
+  },
+  legend: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: spacing.sm,
+    gap: spacing.md,
+    flexWrap: "wrap",
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendLabel: {
+    color: palette.textDim,
+    fontSize: typography.tiny,
+    fontWeight: "600",
   },
 });

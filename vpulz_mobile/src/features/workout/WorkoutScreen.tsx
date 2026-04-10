@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Modal, ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
 import { AppButton, AppCard, AppInput, StickyActionBar } from '../../shared/components/ui';
@@ -28,9 +28,18 @@ const SET_TYPE_OPTIONS: Array<{ value: SetType; label: string }> = [
 
 function formatDuration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(safe / 60);
-  const remainder = safe % 60;
-  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = safe % 60;
+  if (h > 0) {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function formatVolume(kg: number): string {
+  if (kg >= 1000) return `${(kg / 1000).toFixed(1)}k`;
+  return String(Math.round(kg));
 }
 
 function parsePositiveFloat(value: string): number {
@@ -50,7 +59,6 @@ function computeActiveRow(exercise: WorkoutExerciseState, rowCount: number): num
       return index;
     }
   }
-
   return Math.max(0, rowCount - 1);
 }
 
@@ -106,28 +114,20 @@ export function WorkoutScreen() {
   }, [currentWorkout, startEmptyWorkout]);
 
   useEffect(() => {
-    if (!restRunning) {
-      return;
-    }
-
+    if (!restRunning) return;
     if (restRemainingSec <= 0) {
       setRestRunning(false);
       Vibration.vibrate(14);
       return;
     }
-
     const timer = setTimeout(() => {
       setRestRemainingSec((current) => Math.max(0, current - 1));
     }, 1000);
-
     return () => clearTimeout(timer);
   }, [restRemainingSec, restRunning]);
 
   useEffect(() => {
-    if (!currentWorkout) {
-      return;
-    }
-
+    if (!currentWorkout) return;
     setRestDurationSec(Math.max(30, settings.workout.rest_timer_sec || 60));
     setRestRemainingSec(Math.max(30, settings.workout.rest_timer_sec || 60));
   }, [currentWorkout?.session.id, settings.workout.rest_timer_sec]);
@@ -147,23 +147,23 @@ export function WorkoutScreen() {
   );
 
   const totalRows = useMemo(
-    () => exercises.reduce((sum, exercise) => sum + (rowCountByExercise[exercise.id] ?? getPlannedSets(exercise)), 0),
+    () => exercises.reduce((sum, ex) => sum + (rowCountByExercise[ex.id] ?? getPlannedSets(ex)), 0),
     [exercises, getPlannedSets, rowCountByExercise]
   );
 
   const completedSets = useMemo(
-    () => exercises.reduce((sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length, 0),
+    () => exercises.reduce((sum, ex) => sum + ex.sets.filter((s) => s.completed).length, 0),
     [exercises]
   );
 
   const totalVolume = useMemo(
     () =>
       exercises.reduce(
-        (sum, exercise) =>
+        (sum, ex) =>
           sum +
-          exercise.sets
-            .filter((setItem) => setItem.completed)
-            .reduce((setSum, setItem) => setSum + setItem.weight * setItem.reps, 0),
+          ex.sets
+            .filter((s) => s.completed)
+            .reduce((setSum, s) => setSum + s.weight * s.reps, 0),
         0
       ),
     [exercises]
@@ -177,10 +177,10 @@ export function WorkoutScreen() {
       : 'Motivation Boost';
 
   const startRestTimer = useCallback((seconds: number) => {
-    const safeSeconds = Math.max(15, seconds);
-    setRestDurationSec(safeSeconds);
-    setRestRemainingSec(safeSeconds);
-    setCustomRestInput(String(safeSeconds));
+    const safe = Math.max(15, seconds);
+    setRestDurationSec(safe);
+    setRestRemainingSec(safe);
+    setCustomRestInput(String(safe));
     setRestRunning(true);
   }, []);
 
@@ -188,27 +188,18 @@ export function WorkoutScreen() {
     setDraftsByExercise((current) => {
       const next = { ...current };
       let changed = false;
-
       exercises.forEach((exercise) => {
-        if (next[exercise.id]) {
-          return;
-        }
-
+        if (next[exercise.id]) return;
         const lastSet = exercise.sets[exercise.sets.length - 1];
-        next[exercise.id] = {
-          weight: String(lastSet?.weight ?? 20),
-          reps: String(lastSet?.reps ?? 8),
-        };
+        next[exercise.id] = { weight: String(lastSet?.weight ?? 20), reps: String(lastSet?.reps ?? 8) };
         changed = true;
       });
-
       return changed ? next : current;
     });
 
     setRowCountByExercise((current) => {
       const next = { ...current };
       let changed = false;
-
       exercises.forEach((exercise) => {
         const baseline = getPlannedSets(exercise);
         if (!next[exercise.id] || next[exercise.id] < baseline) {
@@ -216,39 +207,30 @@ export function WorkoutScreen() {
           changed = true;
         }
       });
-
-      Object.keys(next).forEach((exerciseId) => {
-        if (!exercises.some((exercise) => exercise.id === exerciseId)) {
-          delete next[exerciseId];
-          changed = true;
-        }
+      Object.keys(next).forEach((id) => {
+        if (!exercises.some((ex) => ex.id === id)) { delete next[id]; changed = true; }
       });
-
       return changed ? next : current;
     });
 
     setSetTypesByExercise((current) => {
       const next = { ...current };
       let changed = false;
-
       exercises.forEach((exercise) => {
         const existing = next[exercise.id] ?? {};
         const nextForExercise = { ...existing };
         let exerciseChanged = false;
-
         exercise.sets.forEach((setItem, rowIndex) => {
           if (!nextForExercise[rowIndex] && setItem.set_type) {
             nextForExercise[rowIndex] = setItem.set_type;
             exerciseChanged = true;
           }
         });
-
         if (exerciseChanged || !next[exercise.id]) {
           next[exercise.id] = nextForExercise;
           changed = true;
         }
       });
-
       return changed ? next : current;
     });
   }, [exercises, getPlannedSets]);
@@ -265,9 +247,8 @@ export function WorkoutScreen() {
   }, []);
 
   const getSetType = useCallback(
-    (exercise: WorkoutExerciseState, rowIndex: number): SetType => {
-      return setTypesByExercise[exercise.id]?.[rowIndex] ?? exercise.sets[rowIndex]?.set_type ?? 'normal';
-    },
+    (exercise: WorkoutExerciseState, rowIndex: number): SetType =>
+      setTypesByExercise[exercise.id]?.[rowIndex] ?? exercise.sets[rowIndex]?.set_type ?? 'normal',
     [setTypesByExercise]
   );
 
@@ -276,15 +257,11 @@ export function WorkoutScreen() {
       ...current,
       [exercise.id]: Math.max(current[exercise.id] ?? 1, exercise.sets.length, 1) + 1,
     }));
-
     const lastSet = exercise.sets[exercise.sets.length - 1];
     if (lastSet) {
       setDraftsByExercise((current) => ({
         ...current,
-        [exercise.id]: {
-          weight: String(lastSet.weight),
-          reps: String(lastSet.reps),
-        },
+        [exercise.id]: { weight: String(lastSet.weight), reps: String(lastSet.reps) },
       }));
     }
   }, []);
@@ -301,28 +278,13 @@ export function WorkoutScreen() {
       let weight = draftWeight;
       let reps = draftReps;
 
-      if (existing && rowIndex !== activeRowIndex) {
-        weight = existing.weight;
-        reps = existing.reps;
-      }
-
-      if (existing && reps <= 0) {
-        weight = existing.weight;
-        reps = existing.reps;
-      }
-
-      if (!existing && reps <= 0) {
-        return;
-      }
+      if (existing && rowIndex !== activeRowIndex) { weight = existing.weight; reps = existing.reps; }
+      if (existing && reps <= 0) { weight = existing.weight; reps = existing.reps; }
+      if (!existing && reps <= 0) return;
 
       if (existing) {
         const willComplete = !existing.completed;
-        const result = await patchSetLog(existing.id, {
-          weight,
-          reps,
-          completed: willComplete,
-        });
-
+        const result = await patchSetLog(existing.id, { weight, reps, completed: willComplete });
         if (willComplete) {
           startRestTimer(restDurationSec);
           if (rowIndex === activeRowIndex) {
@@ -335,7 +297,6 @@ export function WorkoutScreen() {
             }));
           }
         }
-
         return;
       }
 
@@ -358,7 +319,6 @@ export function WorkoutScreen() {
           reps: String(result.suggestion.next_reps),
         },
       }));
-
       setRowCountByExercise((current) => ({
         ...current,
         [exercise.id]: Math.max(current[exercise.id] ?? 1, exercise.sets.length + 1),
@@ -383,34 +343,25 @@ export function WorkoutScreen() {
 
   const finishWorkout = useCallback(async () => {
     const active = currentWorkout;
-    if (!active) {
-      return;
-    }
-
+    if (!active) return;
     Vibration.vibrate(12);
     try {
       const result = await finishActiveWorkout();
-      navigation.navigate('WorkoutSummary', {
-        summary: result.summary,
-        nextPlan: result.nextPlan,
-      });
+      navigation.navigate('WorkoutSummary', { summary: result.summary, nextPlan: result.nextPlan });
       return;
     } catch {
-      // Keep the user flow uninterrupted and save a local summary fallback.
+      // fall through to local completion
     }
-
     const completed = active.state.exercises.reduce(
-      (sum, exercise) => sum + exercise.sets.filter((setItem) => setItem.completed).length,
+      (sum, ex) => sum + ex.sets.filter((s) => s.completed).length,
       0
     );
-    const total = active.state.exercises.reduce((sum, exercise) => sum + exercise.sets.length, 0);
-
+    const total = active.state.exercises.reduce((sum, ex) => sum + ex.sets.length, 0);
     completeActiveWorkoutLocal({
       date: new Date().toISOString(),
       exercises: active.state.exercises,
       performance: total > 0 ? completed / total : 0,
     });
-
     navigation.navigate('MainTabs', { screen: 'Home' });
   }, [completeActiveWorkoutLocal, currentWorkout, finishActiveWorkout, navigation]);
 
@@ -422,10 +373,7 @@ export function WorkoutScreen() {
 
   const applySetType = useCallback(
     (type: SetType) => {
-      if (!setTypePicker) {
-        return;
-      }
-
+      if (!setTypePicker) return;
       setSetTypesByExercise((current) => ({
         ...current,
         [setTypePicker.exerciseId]: {
@@ -439,10 +387,7 @@ export function WorkoutScreen() {
   );
 
   const applyRestPreset = useCallback(
-    (seconds: number) => {
-      startRestTimer(seconds);
-      setRestPickerOpen(false);
-    },
+    (seconds: number) => { startRestTimer(seconds); setRestPickerOpen(false); },
     [startRestTimer]
   );
 
@@ -453,100 +398,122 @@ export function WorkoutScreen() {
   }, [applyRestPreset, customRestInput, restDurationSec]);
 
   const selectedExercise = selectedExerciseName
-    ? exercises.find((exercise) => exercise.name === selectedExerciseName) ?? null
+    ? exercises.find((ex) => ex.name === selectedExerciseName) ?? null
     : null;
 
   const selectedHistory = selectedExercise
     ? workoutHistory
         .slice()
         .reverse()
-        .find((entry) => entry.exercises.some((exercise) => exercise.name === selectedExercise.name)) ?? null
+        .find((entry) => entry.exercises.some((ex) => ex.name === selectedExercise.name)) ?? null
     : null;
 
   const selectedHistoryExercise =
     selectedExercise && selectedHistory
-      ? selectedHistory.exercises.find((exercise) => exercise.name === selectedExercise.name) ?? null
+      ? selectedHistory.exercises.find((ex) => ex.name === selectedExercise.name) ?? null
       : null;
 
   const workoutTitle = currentWorkout?.plan.title ?? 'Workout';
+  const restPct = restDurationSec > 0 ? restRemainingSec / restDurationSec : 0;
 
   return (
-    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]} edges={[]}>
-      <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}> 
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top }]} edges={[]}>
+      <View style={[styles.container, { paddingHorizontal: horizontalGutter }]}>
+
+        {/* ── Top bar ──────────────────────────────────────── */}
         <View style={styles.topBar}>
-          <AppButton variant="secondary" style={styles.topBarButton} onPress={onBack}>
-            Back
-          </AppButton>
-          <Text style={styles.topBarTitle} numberOfLines={1}>
-            {workoutTitle}
-          </Text>
-          <AppButton style={styles.topBarButton} onPress={finishWorkout}>
-            Finish
-          </AppButton>
+          <Pressable style={styles.backBtn} onPress={onBack}>
+            <Text style={styles.backBtnText}>‹ Back</Text>
+          </Pressable>
+          <View style={styles.topBarCenter}>
+            <Text style={styles.topBarTitle} numberOfLines={1}>{workoutTitle}</Text>
+            <View style={styles.liveChip}>
+              <View style={[styles.liveDot, { backgroundColor: timerState.isRunning ? colors.success : colors.mutedText }]} />
+              <Text style={styles.liveChipText}>{timerState.isRunning ? 'LIVE' : 'PAUSED'}</Text>
+            </View>
+          </View>
+          <Pressable style={styles.finishBtn} onPress={finishWorkout}>
+            <Text style={styles.finishBtnText}>Finish</Text>
+          </Pressable>
         </View>
 
-        <View style={styles.mainTimerWrap}>
-          <Text style={styles.mainTimerLabel}>Workout Timer</Text>
-          <Text style={styles.mainTimerValue}>{formatDuration(elapsedSeconds)}</Text>
-          <Text style={styles.mainTimerState}>{timerState.isRunning ? 'Live' : 'Paused'}</Text>
-        </View>
-
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Duration</Text>
-            <Text style={styles.statValue}>{formatDuration(elapsedSeconds)}</Text>
+        {/* ── Live stats bar ───────────────────────────────── */}
+        <View style={styles.statsBar}>
+          <View style={styles.statsBarCell}>
+            <Text style={styles.statsBarValue}>{formatDuration(elapsedSeconds)}</Text>
+            <Text style={styles.statsBarLabel}>TIME</Text>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Volume</Text>
-            <Text style={styles.statValue}>{`${Math.round(totalVolume)}kg`}</Text>
+          <View style={styles.statsBarDivider} />
+          <View style={styles.statsBarCell}>
+            <Text style={styles.statsBarValue}>{formatVolume(totalVolume)}</Text>
+            <Text style={styles.statsBarLabel}>KG</Text>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Sets</Text>
-            <Text style={styles.statValue}>{`${completedSets}/${Math.max(1, totalRows)}`}</Text>
+          <View style={styles.statsBarDivider} />
+          <View style={styles.statsBarCell}>
+            <Text style={styles.statsBarValue}>{`${completedSets}/${Math.max(1, totalRows)}`}</Text>
+            <Text style={styles.statsBarLabel}>SETS</Text>
           </View>
         </View>
 
-        <AppCard style={styles.restCard}>
-          <View style={styles.restHeader}>
-            <Text style={styles.restTitle}>Rest Timer</Text>
-            <AppButton variant="secondary" style={styles.restActionButton} onPress={() => setRestPickerOpen(true)}>
-              Configure
-            </AppButton>
-          </View>
-          <Text style={styles.restCountdown}>{formatDuration(restRunning ? restRemainingSec : restDurationSec)}</Text>
-          <Text style={styles.restMeta}>{restRunning ? 'Running' : 'Ready'}</Text>
-        </AppCard>
+        {/* ── Rest timer banner (only when running) ────────── */}
+        {restRunning && (
+          <Pressable style={styles.restBanner} onPress={() => setRestPickerOpen(true)}>
+            <View style={styles.restBannerLeft}>
+              <View style={styles.restBannerDot} />
+              <Text style={styles.restBannerLabel}>Rest</Text>
+            </View>
+            <View style={styles.restProgressTrack}>
+              <View style={[styles.restProgressFill, { width: `${Math.round(restPct * 100)}%` }]} />
+            </View>
+            <Text style={styles.restBannerTime}>{formatDuration(restRemainingSec)}</Text>
+          </Pressable>
+        )}
 
-        {aiCoachSettings.enabled && latestSetSuggestion ? (
-          <AppCard style={styles.aiCard}>
-            <Text style={styles.aiTitle}>{coachTitle}</Text>
-            <Text style={styles.aiBody} numberOfLines={2}>
+        {/* ── Rest config shortcut (when idle) ─────────────── */}
+        {!restRunning && (
+          <Pressable style={styles.restIdleRow} onPress={() => setRestPickerOpen(true)}>
+            <Text style={styles.restIdleLabel}>Rest timer · {formatDuration(restDurationSec)}</Text>
+            <Text style={styles.restIdleEdit}>Edit</Text>
+          </Pressable>
+        )}
+
+        {/* ── AI Coach tip ─────────────────────────────────── */}
+        {aiCoachSettings.enabled && latestSetSuggestion && (
+          <View style={styles.coachBanner}>
+            <Text style={styles.coachTitle}>{coachTitle}</Text>
+            <Text style={styles.coachBody} numberOfLines={2}>
               {latestSetSuggestion.adjustments[0] ?? 'Keep your form clean and move with control.'}
             </Text>
-          </AppCard>
-        ) : null}
+          </View>
+        )}
 
-        {error ? (
-          <AppCard style={styles.errorCard}>
+        {/* ── Error ────────────────────────────────────────── */}
+        {error && (
+          <View style={styles.errorBanner}>
             <Text style={styles.errorText}>{error}</Text>
-            <AppButton variant="secondary" onPress={clearError}>
-              Dismiss
-            </AppButton>
-          </AppCard>
-        ) : null}
+            <Pressable onPress={clearError}><Text style={styles.errorDismiss}>✕</Text></Pressable>
+          </View>
+        )}
 
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          {!exercises.length ? (
-            <AppCard style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Workout is ready</Text>
-              <Text style={styles.emptyBody}>Add your first exercise to start logging sets.</Text>
-            </AppCard>
-          ) : null}
+        {/* ── Exercise list ─────────────────────────────────── */}
+        <ScrollView
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 120 }]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {!exercises.length && (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No exercises yet</Text>
+              <Text style={styles.emptyBody}>Tap "Add Exercise" below to build your workout.</Text>
+            </View>
+          )}
 
           {exercises.map((exercise) => {
             const draft = draftsByExercise[exercise.id] ?? { weight: '20', reps: '8' };
             const plannedExercise =
-              currentWorkout?.plan?.exercises?.find((item) => item.name.toLowerCase() === exercise.name.toLowerCase()) ?? null;
+              currentWorkout?.plan?.exercises?.find(
+                (item) => item.name.toLowerCase() === exercise.name.toLowerCase()
+              ) ?? null;
             const rowCount = rowCountByExercise[exercise.id] ?? getPlannedSets(exercise);
 
             return (
@@ -567,104 +534,147 @@ export function WorkoutScreen() {
           })}
         </ScrollView>
 
+        {/* ── Footer ───────────────────────────────────────── */}
         <StickyActionBar>
-          <AppButton style={styles.primaryFooterButton} onPress={openExerciseLibrary}>
-            Add Exercise
+          <AppButton style={styles.addExerciseBtn} onPress={openExerciseLibrary}>
+            + Add Exercise
           </AppButton>
         </StickyActionBar>
       </View>
 
-      <Modal visible={Boolean(selectedExerciseName)} transparent animationType="slide" onRequestClose={() => setSelectedExerciseName(null)}>
+      {/* ── Exercise detail modal ─────────────────────────── */}
+      <Modal
+        visible={Boolean(selectedExerciseName)}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedExerciseName(null)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{selectedExerciseName}</Text>
-              <AppButton variant="secondary" style={styles.smallCloseButton} onPress={() => setSelectedExerciseName(null)}>
-                Close
-              </AppButton>
+              <Pressable style={styles.modalClose} onPress={() => setSelectedExerciseName(null)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </Pressable>
             </View>
 
-            <Text style={styles.previewMetaText}>Muscle Group</Text>
-            <Text style={styles.cardBody}>{selectedExercise?.muscle_group ?? '-'}</Text>
-
-            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>Equipment</Text>
-            <Text style={styles.cardBody}>{selectedExercise?.equipment ?? '-'}</Text>
-
-            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>Instructions</Text>
-            <Text style={styles.cardBody}>
-              {currentWorkout?.plan?.exercises?.find((exercise) => exercise.name === selectedExerciseName)?.coachCue ??
-                'No instruction available.'}
-            </Text>
-
-            <Text style={[styles.previewMetaText, { marginTop: spacing.xs }]}>History</Text>
-            {selectedHistoryExercise && selectedHistory ? (
-              <Text style={styles.cardBody}>{`${selectedHistoryExercise.sets} sets • ${selectedHistoryExercise.topWeight ?? '-'}kg x ${selectedHistoryExercise.topReps ?? '-'} reps on ${new Date(selectedHistory.completedAt).toDateString()}`}</Text>
-            ) : (
-              <Text style={styles.cardBody}>No recent history for this exercise.</Text>
-            )}
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Muscle Group</Text>
+              <Text style={styles.modalDetailValue}>{selectedExercise?.muscle_group ?? '—'}</Text>
+            </View>
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Equipment</Text>
+              <Text style={styles.modalDetailValue}>{selectedExercise?.equipment ?? '—'}</Text>
+            </View>
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>Coach Cue</Text>
+              <Text style={styles.modalDetailValue}>
+                {currentWorkout?.plan?.exercises?.find((ex) => ex.name === selectedExerciseName)?.coachCue ??
+                  'No instruction available.'}
+              </Text>
+            </View>
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailLabel}>History</Text>
+              <Text style={styles.modalDetailValue}>
+                {selectedHistoryExercise && selectedHistory
+                  ? `${selectedHistoryExercise.sets} sets · ${selectedHistoryExercise.topWeight ?? '—'}kg × ${selectedHistoryExercise.topReps ?? '—'} reps · ${new Date(selectedHistory.completedAt).toLocaleDateString()}`
+                  : 'No recent history.'}
+              </Text>
+            </View>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={Boolean(setTypePicker)} transparent animationType="slide" onRequestClose={() => setSetTypePicker(null)}>
+      {/* ── Set type picker ───────────────────────────────── */}
+      <Modal
+        visible={Boolean(setTypePicker)}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSetTypePicker(null)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
             <Text style={styles.modalTitle}>Set Type</Text>
             {SET_TYPE_OPTIONS.map((option) => (
-              <AppButton key={option.value} variant="secondary" style={{ marginTop: spacing.xs }} onPress={() => applySetType(option.value)}>
+              <AppButton
+                key={option.value}
+                variant="secondary"
+                style={styles.setTypeOption}
+                onPress={() => applySetType(option.value)}
+              >
                 {option.label}
               </AppButton>
             ))}
-            <AppButton variant="ghost" style={{ marginTop: spacing.sm }} onPress={() => setSetTypePicker(null)}>
+            <AppButton variant="ghost" style={styles.setTypeOption} onPress={() => setSetTypePicker(null)}>
               Cancel
             </AppButton>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={restPickerOpen} transparent animationType="slide" onRequestClose={() => setRestPickerOpen(false)}>
+      {/* ── Rest timer modal ──────────────────────────────── */}
+      <Modal
+        visible={restPickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRestPickerOpen(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
-            <Text style={styles.modalTitle}>Rest Timer</Text>
-            <Text style={styles.restSheetCountdown}>{formatDuration(restRunning ? restRemainingSec : restDurationSec)}</Text>
+            <View style={styles.modalHandle} />
+            <View style={styles.restModalHeader}>
+              <Text style={styles.modalTitle}>Rest Timer</Text>
+              {restRunning && (
+                <Text style={styles.restModalCountdown}>{formatDuration(restRemainingSec)}</Text>
+              )}
+            </View>
 
-            <View style={styles.presetRow}>
-              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(30)}>
-                30s
-              </AppButton>
-              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(60)}>
-                60s
-              </AppButton>
-              <AppButton variant="secondary" style={styles.presetButton} onPress={() => applyRestPreset(90)}>
-                90s
+            <View style={styles.restPresetRow}>
+              {[30, 60, 90, 120].map((s) => (
+                <Pressable
+                  key={s}
+                  style={[styles.restPresetBtn, restDurationSec === s && styles.restPresetBtnActive]}
+                  onPress={() => applyRestPreset(s)}
+                >
+                  <Text style={[styles.restPresetText, restDurationSec === s && styles.restPresetTextActive]}>
+                    {s < 60 ? `${s}s` : `${s / 60}m`}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.restCustomRow}>
+              <AppInput
+                value={customRestInput}
+                onChangeText={setCustomRestInput}
+                keyboardType="number-pad"
+                style={styles.restCustomInput}
+              />
+              <AppButton onPress={applyCustomRest} style={styles.restCustomStart}>
+                Start
               </AppButton>
             </View>
 
-            <Text style={styles.previewMetaText}>Custom seconds</Text>
-            <AppInput value={customRestInput} onChangeText={setCustomRestInput} keyboardType="number-pad" />
-            <AppButton onPress={applyCustomRest}>Start</AppButton>
-
-            {restRunning ? (
-              <View style={styles.restActionsRow}>
+            {restRunning && (
+              <View style={styles.restControlRow}>
                 <AppButton
                   variant="secondary"
-                  style={styles.restActionHalf}
-                  onPress={() => setRestRunning((current) => !current)}
+                  style={styles.restControlBtn}
+                  onPress={() => setRestRunning((r) => !r)}
                 >
                   {restRunning ? 'Pause' : 'Resume'}
                 </AppButton>
                 <AppButton
                   variant="ghost"
-                  style={styles.restActionHalf}
-                  onPress={() => {
-                    setRestRunning(false);
-                    setRestRemainingSec(restDurationSec);
-                  }}
+                  style={styles.restControlBtn}
+                  onPress={() => { setRestRunning(false); setRestRemainingSec(restDurationSec); }}
                 >
-                  Stop
+                  Reset
                 </AppButton>
               </View>
-            ) : null}
+            )}
 
             <AppButton variant="ghost" onPress={() => setRestPickerOpen(false)}>
               Close
@@ -684,140 +694,234 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+
+  // ── Top bar ──────────────────────────────────────────────
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
     gap: spacing.sm,
-    marginBottom: spacing.md,
   },
-  topBarButton: {
-    minHeight: 42,
-    minWidth: 88,
-    borderRadius: radius.sm,
+  backBtn: {
+    paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
+    minWidth: 72,
+  },
+  backBtnText: {
+    color: colors.primary,
+    fontSize: typography.body,
+    fontWeight: '700',
+  },
+  topBarCenter: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
   },
   topBarTitle: {
     color: colors.text,
     fontSize: typography.body,
     fontWeight: '800',
-    flex: 1,
+    letterSpacing: -0.2,
     textAlign: 'center',
   },
-  mainTimerWrap: {
+  liveChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.xl,
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.lg,
-    gap: spacing.xs,
-    marginBottom: spacing.md,
+    gap: 4,
   },
-  mainTimerLabel: {
+  liveDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  liveChipText: {
     color: colors.mutedText,
     fontSize: typography.tiny,
     fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
-  mainTimerValue: {
-    color: colors.text,
-    fontSize: 56,
+  finishBtn: {
+    minWidth: 72,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  finishBtnText: {
+    color: '#000000',
+    fontSize: typography.caption,
     fontWeight: '800',
-    letterSpacing: -1,
+    letterSpacing: 0.2,
   },
-  mainTimerState: {
+
+  // ── Live stats bar ───────────────────────────────────────
+  statsBar: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  statsBarCell: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  statsBarValue: {
+    color: colors.text,
+    fontSize: typography.subtitle,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  statsBarLabel: {
     color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  statsBarDivider: {
+    width: 1,
+    height: '70%',
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+  },
+
+  // ── Rest banner (running) ────────────────────────────────
+  restBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(52,199,89,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(52,199,89,0.30)',
+    marginBottom: spacing.xs,
+  },
+  restBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  restBannerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.success,
+  },
+  restBannerLabel: {
+    color: colors.success,
     fontSize: typography.caption,
     fontWeight: '700',
   },
-  statsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  statCard: {
+  restProgressTrack: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    gap: spacing.xs,
+    height: 4,
+    backgroundColor: 'rgba(52,199,89,0.18)',
+    borderRadius: 2,
+    overflow: 'hidden',
   },
-  statLabel: {
-    color: colors.mutedText,
-    fontSize: typography.tiny,
-    fontWeight: '700',
-    textTransform: 'uppercase',
+  restProgressFill: {
+    height: 4,
+    backgroundColor: colors.success,
+    borderRadius: 2,
   },
-  statValue: {
-    color: colors.text,
-    fontSize: typography.body,
+  restBannerTime: {
+    color: colors.success,
+    fontSize: typography.caption,
     fontWeight: '800',
+    minWidth: 42,
+    textAlign: 'right',
   },
-  restCard: {
-    marginBottom: spacing.md,
-  },
-  restHeader: {
+
+  // ── Rest idle row ────────────────────────────────────────
+  restIdleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  restTitle: {
-    color: colors.text,
-    fontSize: typography.caption,
-    fontWeight: '800',
-  },
-  restActionButton: {
-    minHeight: 40,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-  },
-  restCountdown: {
-    color: colors.text,
-    fontSize: 34,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-  },
-  restMeta: {
-    color: colors.mutedText,
-    fontSize: typography.caption,
-    fontWeight: '700',
-  },
-  aiCard: {
-    marginBottom: spacing.md,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+    marginBottom: spacing.xs,
   },
-  aiTitle: {
-    color: colors.text,
+  restIdleLabel: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '600',
+  },
+  restIdleEdit: {
+    color: colors.primary,
     fontSize: typography.caption,
     fontWeight: '700',
   },
-  aiBody: {
-    color: colors.mutedText,
+
+  // ── AI coach banner ──────────────────────────────────────
+  coachBanner: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.primary + '33',
+    backgroundColor: colors.primary + '0D',
+    gap: 3,
+    marginBottom: spacing.xs,
+  },
+  coachTitle: {
+    color: colors.primary,
+    fontSize: typography.tiny,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  coachBody: {
+    color: colors.secondaryText,
     fontSize: typography.caption,
     lineHeight: 18,
   },
-  errorCard: {
-    marginBottom: spacing.md,
+
+  // ── Error banner ─────────────────────────────────────────
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.danger + '55',
+    backgroundColor: colors.danger + '15',
+    marginBottom: spacing.xs,
   },
   errorText: {
-    color: colors.text,
+    flex: 1,
+    color: colors.danger,
     fontSize: typography.caption,
     lineHeight: 18,
   },
-  content: {
-    gap: spacing.md,
-    paddingBottom: 140,
+  errorDismiss: {
+    color: colors.danger,
+    fontSize: typography.body,
+    fontWeight: '700',
   },
-  emptyCard: {
-    padding: spacing.md,
+
+  // ── Exercise list ────────────────────────────────────────
+  content: {
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  emptyState: {
+    paddingTop: 60,
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   emptyTitle: {
     color: colors.text,
@@ -827,15 +931,22 @@ const styles = StyleSheet.create({
   emptyBody: {
     color: colors.mutedText,
     fontSize: typography.caption,
-    marginTop: spacing.xs,
+    textAlign: 'center',
+    maxWidth: 260,
+    lineHeight: 18,
   },
-  primaryFooterButton: {
+
+  // ── Add exercise button ──────────────────────────────────
+  addExerciseBtn: {
     minHeight: 54,
+    borderRadius: radius.lg,
   },
+
+  // ── Modals ───────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: '#000000CC',
+    backgroundColor: 'rgba(0,0,0,0.7)',
   },
   modalSheet: {
     maxHeight: '86%',
@@ -844,59 +955,119 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderBottomWidth: 0,
-    backgroundColor: colors.surface,
+    backgroundColor: '#0F0F13',
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xl,
     gap: spacing.sm,
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignSelf: 'center',
+    marginBottom: spacing.xs,
   },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.sm,
   },
   modalTitle: {
     color: colors.text,
     fontSize: typography.subtitle,
     fontWeight: '800',
   },
-  smallCloseButton: {
-    minHeight: 40,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
+  modalClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  previewMetaText: {
+  modalCloseText: {
+    color: colors.mutedText,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  modalDetailRow: {
+    gap: 3,
+    paddingVertical: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  modalDetailLabel: {
     color: colors.mutedText,
     fontSize: typography.tiny,
     fontWeight: '700',
     textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
-  cardBody: {
+  modalDetailValue: {
     color: colors.text,
     fontSize: typography.body,
     lineHeight: 22,
   },
-  restSheetCountdown: {
-    color: colors.text,
-    fontSize: 40,
-    fontWeight: '800',
-    textAlign: 'center',
-    letterSpacing: -0.6,
+  setTypeOption: {
+    minHeight: 50,
   },
-  presetRow: {
+
+  // ── Rest modal ───────────────────────────────────────────
+  restModalHeader: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  presetButton: {
+  restModalCountdown: {
+    color: colors.success,
+    fontSize: typography.subtitle,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  restPresetRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  restPresetBtn: {
     flex: 1,
     minHeight: 48,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  restActionsRow: {
+  restPresetBtnActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + '22',
+  },
+  restPresetText: {
+    color: colors.mutedText,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
+  restPresetTextActive: {
+    color: colors.primary,
+  },
+  restCustomRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    alignItems: 'center',
+  },
+  restCustomInput: {
+    flex: 1,
+  },
+  restCustomStart: {
+    minWidth: 88,
+  },
+  restControlRow: {
     flexDirection: 'row',
     gap: spacing.sm,
   },
-  restActionHalf: {
+  restControlBtn: {
     flex: 1,
     minHeight: 48,
   },

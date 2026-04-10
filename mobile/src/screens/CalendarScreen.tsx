@@ -1,89 +1,120 @@
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { StyleSheet, Text, View, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { RootStackParamList } from "../navigation/AppNavigator";
-import {
-  type CalendarWorkout,
-  useWorkoutLogger,
-} from "../state/WorkoutLoggerContext";
+import type { CalendarWorkout } from "../state/WorkoutLoggerContext";
+import { useWorkoutLogger } from "../state/WorkoutLoggerContext";
 import { palette, radius, spacing, typography } from "../theme/workoutLoggerTheme";
-import { formatDateLabel, fromDateKey } from "../utils/workoutLoggerDate";
+import { fromDateKey } from "../utils/workoutLoggerDate";
+import DayDetailPanel from "./components/DayDetailPanel";
 import WorkoutCalendar from "./components/WorkoutCalendar";
 
 type CalendarNavigation = NativeStackNavigationProp<RootStackParamList, "Calendar">;
-
-function sourceLabel(source: CalendarWorkout["source"]): string {
-  return source === "planned" ? "Planned" : "Completed";
-}
 
 export default function CalendarScreen(): React.JSX.Element {
   const navigation = useNavigation<CalendarNavigation>();
   const {
     selectedDate,
     setSelectedDate,
-    workoutDates,
+    calendarDays,
     workoutsForSelectedDate,
+    routineTemplates,
     startWorkoutFromCalendarEntry,
+    markSickDay,
+    undoSickDay,
+    moveWorkout,
+    switchRoutineOnDate,
   } = useWorkoutLogger();
 
   const [monthDate, setMonthDate] = useState<Date>(() => fromDateKey(selectedDate));
-  const selectedDateLabel = useMemo(() => formatDateLabel(selectedDate), [selectedDate]);
+  const [panelVisible, setPanelVisible] = useState(false);
 
-  useEffect(() => {
-    setMonthDate(fromDateKey(selectedDate));
-  }, [selectedDate]);
+  const dayInfo = calendarDays[selectedDate];
 
-  const startFromDate = (entry: CalendarWorkout): void => {
+  const handleSelectDate = (dateKey: string): void => {
+    setSelectedDate(dateKey);
+    setMonthDate(fromDateKey(dateKey));
+    setPanelVisible(true);
+  };
+
+  const handleClosePanel = (): void => {
+    setPanelVisible(false);
+  };
+
+  const handleStartWorkout = (entry: CalendarWorkout): void => {
+    setPanelVisible(false);
     startWorkoutFromCalendarEntry(entry);
     navigation.navigate("Workout");
   };
 
+  // Stat counts for header strip
+  const stats = useMemo(() => {
+    const days = Object.values(calendarDays);
+    return {
+      completed: days.filter((d) => d.status === "completed").length,
+      upcoming: days.filter((d) => d.status === "future").length,
+      missed: days.filter((d) => d.status === "missed").length,
+    };
+  }, [calendarDays]);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Calendar</Text>
-        <Pressable style={styles.closeButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.closeButtonText}>Back</Text>
+        <View>
+          <Text style={styles.title}>Calendar</Text>
+          <Text style={styles.subtitle}>Your training schedule</Text>
+        </View>
+        <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Text style={styles.backButtonText}>Back</Text>
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.card}>
-          <WorkoutCalendar
-            monthDate={monthDate}
-            selectedDate={selectedDate}
-            highlightedDates={workoutDates}
-            onSelectDate={setSelectedDate}
-            onChangeMonth={setMonthDate}
-          />
+      {/* Stats strip */}
+      <View style={styles.statsRow}>
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{stats.completed}</Text>
+          <Text style={styles.statLabel}>Done</Text>
         </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{stats.upcoming}</Text>
+          <Text style={styles.statLabel}>Upcoming</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={styles.statNumber}>{stats.missed}</Text>
+          <Text style={styles.statLabel}>Missed</Text>
+        </View>
+      </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Workouts on {selectedDateLabel}</Text>
-          {workoutsForSelectedDate.length ? (
-            workoutsForSelectedDate.map((entry) => (
-              <View key={entry.id} style={styles.itemRow}>
-                <View style={styles.itemCopy}>
-                  <Text style={styles.itemTitle}>{entry.title}</Text>
-                  <Text style={styles.itemMeta}>
-                    {`${sourceLabel(entry.source)} • ${entry.exercises.length} exercises • ~${entry.durationMin} min`}
-                  </Text>
-                </View>
-                <Pressable
-                  style={styles.itemAction}
-                  onPress={() => startFromDate(entry)}
-                >
-                  <Text style={styles.itemActionText}>Start</Text>
-                </Pressable>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.emptyText}>No workouts linked to this date.</Text>
-          )}
-        </View>
-      </ScrollView>
+      {/* Calendar */}
+      <View style={styles.calendarCard}>
+        <WorkoutCalendar
+          monthDate={monthDate}
+          selectedDate={selectedDate}
+          calendarDays={calendarDays}
+          onSelectDate={handleSelectDate}
+          onChangeMonth={setMonthDate}
+        />
+      </View>
+
+      {/* Day detail panel + backdrop */}
+      <DayDetailPanel
+        visible={panelVisible}
+        selectedDate={selectedDate}
+        dayInfo={dayInfo}
+        workouts={workoutsForSelectedDate}
+        routines={routineTemplates}
+        onClose={handleClosePanel}
+        onStartWorkout={handleStartWorkout}
+        onMarkSick={markSickDay}
+        onUndoSick={undoSickDay}
+        onMove={moveWorkout}
+        onSwitch={switchRoutineOnDate}
+      />
     </SafeAreaView>
   );
 }
@@ -94,10 +125,11 @@ const styles = StyleSheet.create({
     backgroundColor: palette.bgDeep,
   },
   header: {
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
   },
   title: {
@@ -105,8 +137,14 @@ const styles = StyleSheet.create({
     fontSize: typography.title,
     fontWeight: "900",
   },
-  closeButton: {
-    minHeight: 40,
+  subtitle: {
+    color: palette.textDim,
+    fontSize: typography.tiny,
+    fontWeight: "600",
+    marginTop: 1,
+  },
+  backButton: {
+    minHeight: 38,
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: palette.cardBorder,
@@ -114,74 +152,53 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.04)",
+    marginTop: 4,
   },
-  closeButtonText: {
+  backButtonText: {
     color: palette.textMuted,
     fontSize: typography.caption,
     fontWeight: "700",
   },
-  content: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    gap: spacing.md,
-    paddingBottom: spacing.xl,
+  statsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.cardBorder,
+    backgroundColor: palette.card,
+    paddingVertical: spacing.sm,
   },
-  card: {
+  statItem: {
+    flex: 1,
+    alignItems: "center",
+    gap: 2,
+  },
+  statNumber: {
+    color: palette.text,
+    fontSize: typography.subtitle,
+    fontWeight: "900",
+  },
+  statLabel: {
+    color: palette.textDim,
+    fontSize: typography.tiny,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  statDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: palette.cardBorder,
+  },
+  calendarCard: {
+    marginHorizontal: spacing.md,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: palette.cardBorder,
     backgroundColor: palette.card,
     padding: spacing.md,
-    gap: spacing.sm,
-  },
-  sectionTitle: {
-    color: palette.text,
-    fontSize: typography.subtitle,
-    fontWeight: "800",
-  },
-  itemRow: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: palette.cardBorder,
-    backgroundColor: "rgba(255,255,255,0.03)",
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.sm,
-  },
-  itemCopy: {
-    flex: 1,
-  },
-  itemTitle: {
-    color: palette.text,
-    fontSize: typography.body,
-    fontWeight: "800",
-  },
-  itemMeta: {
-    marginTop: 2,
-    color: palette.textMuted,
-    fontSize: typography.caption,
-  },
-  itemAction: {
-    minHeight: 40,
-    minWidth: 74,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: "rgba(249,246,238,0.30)",
-    backgroundColor: palette.accentBg,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: spacing.sm,
-  },
-  itemActionText: {
-    color: palette.text,
-    fontSize: typography.caption,
-    fontWeight: "800",
-  },
-  emptyText: {
-    color: palette.textDim,
-    fontSize: typography.caption,
   },
 });
