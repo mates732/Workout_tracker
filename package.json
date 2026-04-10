@@ -3,11 +3,12 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "start": "expo start",
+    "start": "expo start --localhost",
+    "start:lan": "expo start --lan",
     "start:tunnel": "EXPO_FORCE_WEBCONTAINER_ENV=1 expo start --tunnel --port 8081",
     "start:tunnel:clear": "EXPO_FORCE_WEBCONTAINER_ENV=1 expo start --tunnel --port 8081 --clear",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo start --localhost --android",
+    "ios": "expo start --localhost --ios",
     "web": "expo start --web"
   },
   "dependencies": {

@@ -23,9 +23,10 @@ export default function AppNavigator(): React.JSX.Element {
         <Stack.Navigator
           id={undefined}
           screenOptions={{
-            headerStyle: { backgroundColor: "#2B3940" },
-            headerTintColor: "#F9F6EE",
-            contentStyle: { backgroundColor: "#1E2B32" },
+            headerStyle: { backgroundColor: "#0F0F14" },
+            headerTintColor: "#F0EEFF",
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: "#0B0B0F" },
           }}
         >
           <Stack.Screen
