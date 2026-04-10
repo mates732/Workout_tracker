@@ -1,68 +1,38 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import React, { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, Vibration } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RootStackParamList } from '../../navigation/RootNavigator';
-import { CalendarComponent } from '../calendar/components/CalendarComponent';
-import { AppButton, AppCard } from '../../shared/components/ui';
-import { useWorkoutFlow } from '../../shared/state/WorkoutFlowContext';
+import { useWorkoutStore, getElapsedSeconds, formatDuration } from '../../store/workoutStore';
 import { colors, radius, shadows, spacing, typography } from '../../shared/theme/tokens';
 
-type HomeNavigationProp = NativeStackNavigationProp<RootStackParamList>;
-
-function toDateKey(value: string): string {
-  const dateOnlyMatch = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (dateOnlyMatch) {
-    return `${dateOnlyMatch[1]}-${dateOnlyMatch[2]}-${dateOnlyMatch[3]}`;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value.slice(0, 10);
-  }
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-    date.getDate()
-  ).padStart(2, '0')}`;
-}
-
-function formatVolume(kg: number): string {
-  if (kg >= 1000) return `${(kg / 1000).toFixed(1)}k`;
-  return String(Math.round(kg));
-}
-
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function getSplitColor(splitKey: string): string {
-  switch (splitKey.toLowerCase()) {
-    case 'push': return colors.splitChest;
-    case 'pull': return colors.splitBack;
-    case 'legs': return colors.splitLegs;
-    case 'arms': return colors.splitArms;
-    default: return colors.primary;
-  }
-}
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 export function HomeScreen() {
-  const navigation = useNavigation<HomeNavigationProp>();
+  const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
-  const {
-    selectedDate,
-    setSelectedDate,
-    plannedWorkouts,
-    workoutHistory,
-    lastWorkoutSummary,
-    currentWorkout,
-    elapsedSeconds,
-    userProfile,
-    startPlannedWorkout,
-    startOrResumeWorkout,
-  } = useWorkoutFlow();
 
-  const todayKey = useMemo(() => toDateKey(new Date().toISOString()), []);
+  const activeWorkoutId = useWorkoutStore((s) => s.activeWorkoutId);
+  const sessionStartedAt = useWorkoutStore((s) => s.sessionStartedAt);
+  const history = useWorkoutStore((s) => s.history);
+  const workouts = useWorkoutStore((s) => s.workouts);
+  const createWorkout = useWorkoutStore((s) => s.createWorkout);
+  const startWorkout = useWorkoutStore((s) => s.startWorkout);
+
+  const [elapsed, setElapsed] = useState(() => getElapsedSeconds(sessionStartedAt));
+
+  useEffect(() => {
+    if (!sessionStartedAt) {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(getElapsedSeconds(sessionStartedAt));
+    const interval = setInterval(() => {
+      setElapsed(getElapsedSeconds(sessionStartedAt));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sessionStartedAt]);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -71,245 +41,158 @@ export function HomeScreen() {
     return 'Good evening';
   }, []);
 
-  const username = userProfile?.username || 'Athlete';
-
-  // Weekly stats — last 7 days
   const weekStats = useMemo(() => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 6);
     cutoff.setHours(0, 0, 0, 0);
-    const entries = workoutHistory.filter((w) => new Date(w.completedAt) >= cutoff);
-    return {
-      count: entries.length,
-      volume: entries.reduce((s, w) => s + w.totalVolume, 0),
-    };
-  }, [workoutHistory]);
+    const entries = history.filter((h) => new Date(h.completedAt) >= cutoff);
+    const totalSets = entries.reduce((sum, e) => sum + e.setCount, 0);
+    const totalMin = entries.reduce((sum, e) => sum + Math.round(e.durationSec / 60), 0);
+    return { count: entries.length, totalSets, totalMin };
+  }, [history]);
 
-  const selectedDayPlanned = useMemo(
-    () => plannedWorkouts.filter((item) => item.date === selectedDate),
-    [plannedWorkouts, selectedDate]
-  );
+  const lastWorkout = history[0] ?? null;
 
-  const selectedDayCompleted = useMemo(
-    () => workoutHistory.filter((item) => toDateKey(item.completedAt) === selectedDate),
-    [selectedDate, workoutHistory]
-  );
+  const handleStartWorkout = useCallback(() => {
+    if (activeWorkoutId) {
+      navigation.navigate('ActiveWorkout');
+      return;
+    }
+    const id = createWorkout('Workout');
+    startWorkout(id);
+    navigation.navigate('ActiveWorkout', { workoutId: id });
+  }, [activeWorkoutId, createWorkout, navigation, startWorkout]);
 
-  const workoutDates = useMemo(() => {
-    const keys = new Set<string>();
-    plannedWorkouts.forEach((w) => keys.add(w.date));
-    workoutHistory.forEach((e) => keys.add(toDateKey(e.completedAt)));
-    return Array.from(keys);
-  }, [plannedWorkouts, workoutHistory]);
-
-  const nextWorkout = useMemo(() => {
-    if (!plannedWorkouts.length) return null;
-    return (
-      plannedWorkouts.find((item) => item.date === todayKey) ??
-      plannedWorkouts.find((item) => item.date > todayKey) ??
-      null
-    );
-  }, [plannedWorkouts, todayKey]);
-
-  const startWorkout = () => {
-    Vibration.vibrate(8);
-    startOrResumeWorkout();
+  const handleResumeWorkout = useCallback(() => {
     navigation.navigate('ActiveWorkout');
-  };
-
-  const startNextWorkout = () => {
-    Vibration.vibrate(8);
-    if (!nextWorkout) { startWorkout(); return; }
-    startPlannedWorkout(nextWorkout);
-    navigation.navigate('ActiveWorkout');
-  };
-
-  const startSelectedDayWorkout = () => {
-    const planned = selectedDayPlanned[0];
-    Vibration.vibrate(8);
-    if (!planned) { startWorkout(); return; }
-    startPlannedWorkout(planned);
-    navigation.navigate('ActiveWorkout');
-  };
+  }, [navigation]);
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={[]}>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
       <ScrollView
-        contentContainerStyle={[
-          styles.container,
-          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + 120 },
-        ]}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 100 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Header ─────────────────────────────────────────── */}
+        {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.greeting}>{greeting},</Text>
-          <Text style={styles.username}>{username}</Text>
+          <Text style={styles.greeting}>{greeting}</Text>
+          <Text style={styles.appName}>Vpulz</Text>
         </View>
 
-        {/* ── Active workout banner ───────────────────────────── */}
-        {currentWorkout && (
-          <Pressable
-            style={styles.activeBanner}
-            onPress={() => navigation.navigate('ActiveWorkout')}
-          >
-            <View style={styles.activePulse} />
-            <Text style={styles.activeBannerLabel}>Workout in progress</Text>
-            <Text style={styles.activeBannerTime}>{formatElapsed(elapsedSeconds)}</Text>
-            <Text style={styles.activeBannerCaret}>›</Text>
+        {/* Active workout banner */}
+        {activeWorkoutId && (
+          <Pressable style={styles.activeBanner} onPress={handleResumeWorkout}>
+            <View style={styles.activeDot} />
+            <View style={styles.activeCopy}>
+              <Text style={styles.activeLabel}>Workout in progress</Text>
+              <Text style={styles.activeTime}>{formatDuration(elapsed)}</Text>
+            </View>
+            <Text style={styles.activeCaret}>Resume</Text>
           </Pressable>
         )}
 
-        {/* ── Weekly stats strip ─────────────────────────────── */}
-        <View style={styles.statsStrip}>
+        {/* Weekly stats */}
+        <View style={styles.statsRow}>
           <View style={styles.statCell}>
             <Text style={styles.statValue}>{weekStats.count}</Text>
-            <Text style={styles.statLabel}>THIS WEEK</Text>
+            <Text style={styles.statLabel}>WORKOUTS</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statCell}>
-            <Text style={styles.statValue}>{formatVolume(weekStats.volume)}</Text>
-            <Text style={styles.statLabel}>VOLUME 7D</Text>
+            <Text style={styles.statValue}>{weekStats.totalSets}</Text>
+            <Text style={styles.statLabel}>SETS</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statCell}>
-            <Text style={styles.statValue}>
-              {lastWorkoutSummary ? String(lastWorkoutSummary.durationMinutes) : '—'}
-            </Text>
-            <Text style={styles.statLabel}>LAST MIN</Text>
+            <Text style={styles.statValue}>{weekStats.totalMin}</Text>
+            <Text style={styles.statLabel}>MINUTES</Text>
           </View>
         </View>
 
-        {/* ── Primary CTA ────────────────────────────────────── */}
-        {!currentWorkout && (
-          <AppButton style={styles.ctaButton} onPress={startWorkout}>
-            Start Workout
-          </AppButton>
+        {/* Start Workout CTA */}
+        {!activeWorkoutId && (
+          <Pressable
+            style={({ pressed }) => [styles.ctaButton, pressed && styles.ctaPressed]}
+            onPress={handleStartWorkout}
+          >
+            <Text style={styles.ctaIcon}>+</Text>
+            <Text style={styles.ctaText}>Start New Workout</Text>
+          </Pressable>
         )}
 
-        {/* ── Calendar card ──────────────────────────────────── */}
-        <AppCard style={styles.calendarCard}>
-          <View style={styles.cardHeader}>
+        {/* Calendar shortcut */}
+        <Pressable
+          style={({ pressed }) => [styles.calendarCard, pressed && styles.cardPressed]}
+          onPress={() => navigation.navigate('Calendar')}
+        >
+          <Text style={styles.cardIcon}>📅</Text>
+          <View style={styles.cardCopy}>
             <Text style={styles.cardTitle}>Calendar</Text>
-            <AppButton
-              variant="secondary"
-              style={styles.headerButton}
-              onPress={() => navigation.navigate('Calendar')}
-            >
-              Full View
-            </AppButton>
+            <Text style={styles.cardSubtitle}>View your workout history</Text>
           </View>
+          <Text style={styles.cardCaret}>›</Text>
+        </Pressable>
 
-          <CalendarComponent
-            selectedDate={selectedDate}
-            workoutDates={workoutDates}
-            onSelectDate={setSelectedDate}
-            weeksToRender={9}
-          />
-
-          {/* Selected day detail */}
-          {(selectedDayPlanned.length > 0 || selectedDayCompleted.length > 0) && (
-            <View style={styles.selectedDayRow}>
-              {selectedDayCompleted.length > 0 ? (
-                <Text style={styles.selectedDayText}>
-                  {selectedDayCompleted.length === 1
-                    ? '1 workout completed'
-                    : `${selectedDayCompleted.length} workouts completed`}
-                </Text>
-              ) : (
-                <>
-                  <Text style={styles.selectedDayText} numberOfLines={1}>
-                    {selectedDayPlanned[0].preview.title}
-                  </Text>
-                  <AppButton
-                    variant="secondary"
-                    style={styles.selectedStartBtn}
-                    onPress={startSelectedDayWorkout}
-                  >
-                    Start
-                  </AppButton>
-                </>
-              )}
-            </View>
-          )}
-        </AppCard>
-
-        {/* ── Last Workout card ──────────────────────────────── */}
-        {lastWorkoutSummary && (
-          <AppCard style={styles.lastCard}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>Last Workout</Text>
-              <View
-                style={[
-                  styles.splitBadge,
-                  { borderColor: getSplitColor(lastWorkoutSummary.splitKey) + '55' },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.splitBadgeText,
-                    { color: getSplitColor(lastWorkoutSummary.splitKey) },
-                  ]}
-                >
-                  {lastWorkoutSummary.splitKey.toUpperCase()}
-                </Text>
+        {/* Last workout */}
+        {lastWorkout && (
+          <View style={styles.lastCard}>
+            <Text style={styles.sectionTitle}>Last Workout</Text>
+            <Text style={styles.lastName}>{lastWorkout.workoutName}</Text>
+            <View style={styles.lastStats}>
+              <View style={styles.lastStatCell}>
+                <Text style={styles.lastStatValue}>{Math.round(lastWorkout.durationSec / 60)}</Text>
+                <Text style={styles.lastStatLabel}>min</Text>
+              </View>
+              <View style={styles.lastStatCell}>
+                <Text style={styles.lastStatValue}>{lastWorkout.exerciseCount}</Text>
+                <Text style={styles.lastStatLabel}>exercises</Text>
+              </View>
+              <View style={styles.lastStatCell}>
+                <Text style={styles.lastStatValue}>{lastWorkout.setCount}</Text>
+                <Text style={styles.lastStatLabel}>sets</Text>
               </View>
             </View>
-
-            {lastWorkoutSummary.summaryLine ? (
-              <Text style={styles.summaryLine}>{lastWorkoutSummary.summaryLine}</Text>
-            ) : null}
-
-            <View style={styles.miniStats}>
-              <View style={styles.miniStatCell}>
-                <Text style={styles.miniStatValue}>{lastWorkoutSummary.durationMinutes}</Text>
-                <Text style={styles.miniStatLabel}>min</Text>
-              </View>
-              <View style={styles.miniStatCell}>
-                <Text style={styles.miniStatValue}>{formatVolume(lastWorkoutSummary.totalVolume)}</Text>
-                <Text style={styles.miniStatLabel}>kg</Text>
-              </View>
-              <View style={styles.miniStatCell}>
-                <Text style={styles.miniStatValue}>{lastWorkoutSummary.completedSets}</Text>
-                <Text style={styles.miniStatLabel}>sets</Text>
-              </View>
-              {lastWorkoutSummary.prs > 0 && (
-                <View style={styles.miniStatCell}>
-                  <Text style={[styles.miniStatValue, { color: colors.success }]}>
-                    {lastWorkoutSummary.prs}
-                  </Text>
-                  <Text style={styles.miniStatLabel}>PRs</Text>
-                </View>
-              )}
-            </View>
-          </AppCard>
+            <Text style={styles.lastDate}>
+              {new Date(lastWorkout.completedAt).toLocaleDateString(undefined, {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </Text>
+          </View>
         )}
 
-        {/* ── Next planned workout ───────────────────────────── */}
-        {nextWorkout && (
-          <AppCard style={styles.nextCard}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTitle}>Next Workout</Text>
-              <Text style={styles.nextDateChip}>
-                {nextWorkout.date === todayKey ? 'Today' : nextWorkout.date.slice(5)}
-              </Text>
-            </View>
-            <Text style={styles.nextName}>{nextWorkout.preview.title}</Text>
-            <Text style={styles.nextMeta}>
-              {`${nextWorkout.preview.exercises.length} exercises · ~${nextWorkout.preview.estimatedDurationMin} min`}
-            </Text>
-            <AppButton style={styles.nextButton} onPress={startNextWorkout}>
-              Start
-            </AppButton>
-          </AppCard>
+        {/* Templates */}
+        {workouts.length > 0 && (
+          <View style={styles.templatesSection}>
+            <Text style={styles.sectionTitle}>Quick Start</Text>
+            {workouts.slice(0, 4).map((w) => (
+              <Pressable
+                key={w.id}
+                style={({ pressed }) => [styles.templateRow, pressed && styles.cardPressed]}
+                onPress={() => {
+                  startWorkout(w.id);
+                  navigation.navigate('ActiveWorkout', { workoutId: w.id });
+                }}
+              >
+                <View style={styles.templateInfo}>
+                  <Text style={styles.templateName}>{w.name}</Text>
+                  <Text style={styles.templateMeta}>
+                    {w.exercises.length} exercise{w.exercises.length !== 1 ? 's' : ''}
+                  </Text>
+                </View>
+                <Text style={styles.templateArrow}>›</Text>
+              </Pressable>
+            ))}
+          </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
     backgroundColor: colors.background,
   },
@@ -317,23 +200,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     gap: spacing.md,
   },
-
-  // Header
   header: {
+    paddingTop: spacing.md,
     gap: 2,
-    marginBottom: spacing.xs,
   },
   greeting: {
     color: colors.mutedText,
     fontSize: typography.caption,
     fontWeight: '600',
-    letterSpacing: 0.2,
+    letterSpacing: 0.3,
   },
-  username: {
+  appName: {
     color: colors.text,
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: '800',
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
   },
 
   // Active banner
@@ -343,40 +224,43 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.primary + '55',
+    borderColor: colors.primary + '44',
   },
-  activePulse: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  activeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: colors.success,
   },
-  activeBannerLabel: {
+  activeCopy: {
     flex: 1,
+    gap: 2,
+  },
+  activeLabel: {
     color: colors.text,
     fontSize: typography.caption,
     fontWeight: '700',
   },
-  activeBannerTime: {
+  activeTime: {
     color: colors.primary,
     fontSize: typography.caption,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
-  activeBannerCaret: {
-    color: colors.mutedText,
-    fontSize: 18,
-    fontWeight: '700',
-    lineHeight: 20,
+  activeCaret: {
+    color: colors.primary,
+    fontSize: typography.caption,
+    fontWeight: '800',
   },
 
-  // Stats strip
-  statsStrip: {
+  // Stats
+  statsRow: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: spacing.md,
@@ -385,141 +269,163 @@ const styles = StyleSheet.create({
   statCell: {
     flex: 1,
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
   },
   statValue: {
     color: colors.text,
-    fontSize: typography.subtitle,
+    fontSize: 22,
     fontWeight: '800',
     letterSpacing: -0.3,
   },
   statLabel: {
     color: colors.mutedText,
-    fontSize: typography.tiny,
+    fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
   statDivider: {
     width: 1,
-    height: '70%',
-    backgroundColor: colors.border,
     alignSelf: 'center',
+    height: '60%',
+    backgroundColor: colors.border,
   },
 
-  // CTA button
+  // CTA
   ctaButton: {
-    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    minHeight: 60,
     borderRadius: radius.lg,
+    backgroundColor: colors.primary,
+    ...shadows.lifted,
+  },
+  ctaPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  ctaIcon: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '300',
+  },
+  ctaText: {
+    color: '#FFFFFF',
+    fontSize: typography.body,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
 
   // Calendar card
   calendarCard: {
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-  },
-  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cardPressed: {
+    opacity: 0.8,
+  },
+  cardIcon: {
+    fontSize: 28,
+  },
+  cardCopy: {
+    flex: 1,
+    gap: 2,
   },
   cardTitle: {
     color: colors.text,
     fontSize: typography.body,
     fontWeight: '700',
   },
-  headerButton: {
-    minHeight: 34,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
-  },
-  selectedDayRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: spacing.sm,
-  },
-  selectedDayText: {
-    flex: 1,
-    color: colors.secondaryText,
-    fontSize: typography.caption,
-    fontWeight: '600',
-  },
-  selectedStartBtn: {
-    minHeight: 34,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-  },
-
-  // Last Workout card
-  lastCard: {
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-  },
-  splitBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    backgroundColor: 'transparent',
-  },
-  splitBadgeText: {
-    fontSize: typography.tiny,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  summaryLine: {
+  cardSubtitle: {
     color: colors.mutedText,
     fontSize: typography.caption,
-    lineHeight: 18,
-    marginBottom: spacing.sm,
   },
-  miniStats: {
+  cardCaret: {
+    color: colors.mutedText,
+    fontSize: 22,
+    fontWeight: '600',
+  },
+
+  // Last workout
+  lastCard: {
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  sectionTitle: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  lastName: {
+    color: colors.text,
+    fontSize: typography.body,
+    fontWeight: '700',
+  },
+  lastStats: {
     flexDirection: 'row',
-    gap: spacing.lg,
+    gap: spacing.xl,
   },
-  miniStatCell: {
+  lastStatCell: {
     alignItems: 'center',
     gap: 2,
   },
-  miniStatValue: {
+  lastStatValue: {
     color: colors.text,
-    fontSize: typography.body,
+    fontSize: typography.subtitle,
     fontWeight: '800',
   },
-  miniStatLabel: {
+  lastStatLabel: {
     color: colors.mutedText,
     fontSize: typography.tiny,
     fontWeight: '600',
   },
-
-  // Next Workout card
-  nextCard: {
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-  },
-  nextDateChip: {
-    color: colors.primary,
-    fontSize: typography.caption,
-    fontWeight: '700',
-  },
-  nextName: {
-    color: colors.text,
-    fontSize: typography.body,
-    fontWeight: '700',
-    marginBottom: 3,
-  },
-  nextMeta: {
+  lastDate: {
     color: colors.mutedText,
-    fontSize: typography.caption,
-    marginBottom: spacing.sm,
+    fontSize: typography.tiny,
   },
-  nextButton: {
-    minHeight: 46,
+
+  // Templates
+  templatesSection: {
+    gap: spacing.sm,
+  },
+  templateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: spacing.md,
     borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  templateInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  templateName: {
+    color: colors.text,
+    fontSize: typography.caption,
+    fontWeight: '700',
+  },
+  templateMeta: {
+    color: colors.mutedText,
+    fontSize: typography.tiny,
+  },
+  templateArrow: {
+    color: colors.mutedText,
+    fontSize: 18,
+    fontWeight: '600',
   },
 });

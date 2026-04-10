@@ -1,22 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { HomeScreen } from '../features/home/Home';
-import { ProfileScreen } from '../features/profile/ProfileScreen';
-import { TrainingScreen } from '../features/training/TrainingScreen';
-import { colors } from '../shared/theme/tokens';
+import { CalendarScreen } from '../features/calendar/CalendarScreen';
+import { colors, radius } from '../shared/theme/tokens';
 
 export type MainTabsParamList = {
   Home: undefined;
-  Training: undefined;
-  Settings: undefined;
+  CalendarTab: undefined;
 };
 
 const Tab = createBottomTabNavigator<MainTabsParamList, undefined>();
 
 const TAB_ICON: Record<keyof MainTabsParamList, keyof typeof Ionicons.glyphMap> = {
   Home: 'home-outline',
-  Training: 'barbell-outline',
-  Settings: 'settings-outline',
+  CalendarTab: 'calendar-outline',
 };
 
 export function MainTabs() {
@@ -31,21 +28,21 @@ export function MainTabs() {
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.mutedText,
         tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
+          fontSize: 11,
+          fontWeight: '700',
           marginBottom: 2,
         },
         tabBarStyle: {
           position: 'absolute',
-          left: 16,
-          right: 16,
-          bottom: 16,
-          height: 72,
+          left: 20,
+          right: 20,
+          bottom: 20,
+          height: 64,
           paddingTop: 8,
           paddingBottom: 8,
           borderWidth: 1,
           borderColor: colors.border,
-          borderRadius: 24,
+          borderRadius: radius.xl,
           backgroundColor: colors.surface,
           elevation: 0,
         },
@@ -55,13 +52,10 @@ export function MainTabs() {
       })}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Training" component={TrainingScreen} />
       <Tab.Screen
-        name="Settings"
-        component={ProfileScreen}
-        options={{
-          title: 'Settings',
-        }}
+        name="CalendarTab"
+        component={CalendarScreen}
+        options={{ title: 'Calendar' }}
       />
     </Tab.Navigator>
   );
