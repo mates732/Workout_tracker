@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /c/Users/PC/Tracker_Vpulz/.claude/worktrees/beautiful-wilbur/*.md)",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}

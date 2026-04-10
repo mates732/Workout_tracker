@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from vpulz.backend.models.domain import SetLog, Workout
-from vpulz.backend.repositories.memory_repo import WorkoutRepository
+from backend.models.domain import SetLog, Workout
+from backend.repositories.memory_repo import WorkoutRepository
 
 
 class WorkoutLoggingService:
