@@ -4,9 +4,9 @@
     {
       "name": "vpulz-web",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["expo", "start", "--web", "--port", "19006"],
+      "runtimeArgs": ["serve", "dist", "--listen", "19006"],
       "port": 19006,
-      "autoPort": false,
+      "autoPort": true,
       "cwd": "vpulz_mobile"
     }
   ]
